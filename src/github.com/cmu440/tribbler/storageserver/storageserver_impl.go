@@ -10,6 +10,8 @@ type storageServer struct {
 	// TODO: implement this!
 }
 
+//hello world
+
 // NewStorageServer creates and starts a new StorageServer. masterServerHostPort
 // is the master storage server's host:port address. If empty, then this server
 // is the master; otherwise, this server is a slave. numNodes is the total number of
