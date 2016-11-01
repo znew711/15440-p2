@@ -2,18 +2,21 @@ package storageserver
 
 import (
 	"errors"
+	"github.com/cmu440/tribbler/rpc/storagerpc"
+	"http"
 	"net/rpc"
 	"strconv"
-
-	"github.com/cmu440/tribbler/rpc/storagerpc"
+	"time"
 )
 
 type storageServer struct {
-	Data map[string] []byte
-	NodeId uint32
-	NodesJoined int
-	Nodes []storagerpc.Node
-	Listener *net.Listener
+	Data             map[string][]byte
+	NodeId           uint32
+	NodesJoined      int
+	ExpectedNumNodes int
+	Nodes            []storagerpc.Node
+	Listener         *net.Listener
+	SlaveJoined      chan bool
 }
 
 //hello world
@@ -27,35 +30,84 @@ type storageServer struct {
 // This function should return only once all storage servers have joined the ring,
 // and should return a non-nil error if the storage server could not be started.
 func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID uint32) (StorageServer, error) {
-	ss := storageServer {
-		Data: make(map[string]int),
-		NodesJoined: 0,
-		Nodes: make([]node, numNodes),
-		NodeId: nodeID,
-		Listener: nil,
+	ss := storageServer{
+		Data:             make(map[string]int),
+		NodesJoined:      1,
+		ExpectedNumNodes: numNodes,
+		Nodes:            make([]node, numNodes),
+		NodeId:           nodeID,
+		Listener:         nil,
+		SlaveJoined:      make(chan bool, 5),
 	}
-	rpc.Register(storagerpc.Wrap(ss))
+	rpc.RegisterName("StorageServer", storagerpc.Wrap(ss))
 	rpc.HandleHttp()
-	l, e := net.listen(":" + strconv.Itoa(port))
+	l, e := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
 		return nil, err
 	}
 	ss.Listener = l
+	go http.Serve(l, nil)
 
 	if masterServerHostPort == nil {
-		ss.Nodes[0] = storagerpc.Node{port, nodeID}
-		ss.NodesJoined = 1
-		for ss.NodesJoined < numNodes {
-
+		//master
+		ss.Nodes[0] = storagerpc.Node{"localhost:" + strconv.Itoa(port), nodeID}
+		needMoreSlaves := true
+		for needMoreSlaves {
+			canExit := false
+			select {
+			case <-ss.SlaveJoined:
+				ss.NodesJoined += 1
+				if NodesJoined == numNodes {
+					needMoreSlaves = false
+				}
+			}
 		}
 	} else {
 		//we are a slave
+		masterConn, err := rpc.DialHTTP("tcp", masterServerHostPort)
+		if err != nil {
+			return nil, err
+		}
+		args := &storagerpc.RegisterArgs{
+			ServerInfo: storagerpc.Node{"localhost:" + strconv.Itoa(port), nodeID},
+		}
+		var reply storagerpc.RegisterReply
+		notReady := true
+		for notReady {
+			if err := tc.client.Call("StorageServer.RegisterServer", args, &reply); err != nil {
+				return nil, err
+			}
+			if reply.Status == storagerpc.OK {
+				ss.Nodes = reply.Servers
+				notReady = false
+				ss.numNodes = len(reply.Servers)
+			} else {
+				time.Sleep(time.Second)
+			}
+		}
 	}
 	return &ss, nil
 }
 
 func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *storagerpc.RegisterReply) error {
-	return errors.New("not implemented")
+	found := false
+	for i := 0; i < ss.ExpectedNumNodes; i++ {
+		if ss.Nodes[i].HostPort == args.ServerInfo.HostPort {
+			found = true
+		}
+	}
+	if !found {
+		ss.Nodes[ss.NodesJoined] = args.ServerInfo
+		ss.NodesJoined += 1
+	}
+	if ss.NodesJoined < ss.ExpectedNumNodes {
+		reply.Status = storagerpc.NotReady
+	} else {
+		reply.Status = storagerpc.OK
+		reply.Servers = ss.Nodes
+	}
+	ss.SlaveJoined <- true
+	return nil
 }
 
 func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *storagerpc.GetServersReply) error {
