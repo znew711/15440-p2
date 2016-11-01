@@ -2,12 +2,18 @@ package storageserver
 
 import (
 	"errors"
+	"net/rpc"
+	"strconv"
 
 	"github.com/cmu440/tribbler/rpc/storagerpc"
 )
 
 type storageServer struct {
-	// TODO: implement this!
+	Data map[string] []byte
+	NodeId uint32
+	NodesJoined int
+	Nodes []storagerpc.Node
+	Listener *net.Listener
 }
 
 //hello world
@@ -21,7 +27,31 @@ type storageServer struct {
 // This function should return only once all storage servers have joined the ring,
 // and should return a non-nil error if the storage server could not be started.
 func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID uint32) (StorageServer, error) {
-	return nil, errors.New("not implemented")
+	ss := storageServer {
+		Data: make(map[string]int),
+		NodesJoined: 0,
+		Nodes: make([]node, numNodes),
+		NodeId: nodeID,
+		Listener: nil,
+	}
+	rpc.Register(storagerpc.Wrap(ss))
+	rpc.HandleHttp()
+	l, e := net.listen(":" + strconv.Itoa(port))
+	if err != nil {
+		return nil, err
+	}
+	ss.Listener = l
+
+	if masterServerHostPort == nil {
+		ss.Nodes[0] = storagerpc.Node{port, nodeID}
+		ss.NodesJoined = 1
+		for ss.NodesJoined < numNodes {
+
+		}
+	} else {
+		//we are a slave
+	}
+	return &ss, nil
 }
 
 func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *storagerpc.RegisterReply) error {
