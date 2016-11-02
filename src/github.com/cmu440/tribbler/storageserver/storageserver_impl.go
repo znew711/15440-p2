@@ -3,7 +3,8 @@ package storageserver
 import (
 	"errors"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
-	"http"
+	"net"
+	"net/http"
 	"net/rpc"
 	"strconv"
 	"time"
@@ -31,33 +32,32 @@ type storageServer struct {
 // and should return a non-nil error if the storage server could not be started.
 func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID uint32) (StorageServer, error) {
 	ss := storageServer{
-		Data:             make(map[string]int),
+		Data:             make(map[string] []byte),
 		NodesJoined:      1,
 		ExpectedNumNodes: numNodes,
-		Nodes:            make([]node, numNodes),
+		Nodes:            make([]storagerpc.Node, numNodes),
 		NodeId:           nodeID,
 		Listener:         nil,
 		SlaveJoined:      make(chan bool, 5),
 	}
-	rpc.RegisterName("StorageServer", storagerpc.Wrap(ss))
-	rpc.HandleHttp()
-	l, e := net.Listen("tcp", ":"+strconv.Itoa(port))
+	rpc.RegisterName("StorageServer", storagerpc.Wrap(&ss))
+	rpc.HandleHTTP()
+	l, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
 		return nil, err
 	}
-	ss.Listener = l
+	ss.Listener = &l
 	go http.Serve(l, nil)
 
-	if masterServerHostPort == nil {
+	if masterServerHostPort == "" {
 		//master
 		ss.Nodes[0] = storagerpc.Node{"localhost:" + strconv.Itoa(port), nodeID}
 		needMoreSlaves := true
 		for needMoreSlaves {
-			canExit := false
 			select {
 			case <-ss.SlaveJoined:
 				ss.NodesJoined += 1
-				if NodesJoined == numNodes {
+				if ss.NodesJoined == numNodes {
 					needMoreSlaves = false
 				}
 			}
@@ -74,13 +74,13 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		var reply storagerpc.RegisterReply
 		notReady := true
 		for notReady {
-			if err := tc.client.Call("StorageServer.RegisterServer", args, &reply); err != nil {
+			if err := masterConn.Call("StorageServer.RegisterServer", args, &reply); err != nil {
 				return nil, err
 			}
 			if reply.Status == storagerpc.OK {
 				ss.Nodes = reply.Servers
 				notReady = false
-				ss.numNodes = len(reply.Servers)
+				ss.ExpectedNumNodes = len(reply.Servers)
 			} else {
 				time.Sleep(time.Second)
 			}
