@@ -2,12 +2,20 @@ package libstore
 
 import (
 	"errors"
-
+	"fmt"
+	//"net"
+	//"net/http"
+	"net/rpc"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
+	"github.com/cmu440/tribbler/rpc/librpc"
 )
 
 type libstore struct {
 	// TODO: implement this!
+	storageCli *rpc.Client
+	mode LeaseMode
+	masterServerHostPort string
+	myHostPort string
 }
 
 // NewLibstore creates a new instance of a TribServer's libstore. masterServerHostPort
@@ -35,31 +43,115 @@ type libstore struct {
 // need to create a brand new HTTP handler to serve the requests (the Libstore may
 // simply reuse the TribServer's HTTP handler since the two run in the same process).
 func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libstore, error) {
-	return nil, errors.New("not implemented")
+	libstore := new(libstore)
+	libstore.mode = mode
+	libstore.myHostPort = myHostPort
+	libstore.masterServerHostPort = masterServerHostPort
+
+    err := rpc.RegisterName("LeaseCallbacks", librpc.Wrap(libstore))
+    fmt.Println("registered")
+    if err != nil {
+        return nil, err
+    }
+
+	cli, err := rpc.DialHTTP("tcp", masterServerHostPort)
+	fmt.Println("dialed")
+    if err != nil {
+		return nil, err
+	}
+	libstore.storageCli = cli
+
+	return libstore, nil
 }
 
 func (ls *libstore) Get(key string) (string, error) {
-	return "", errors.New("not implemented")
+	args := &storagerpc.GetArgs{Key: key, WantLease: false, HostPort: ls.myHostPort}
+	var reply storagerpc.GetReply
+	if err := ls.storageCli.Call("StorageServer.Get", args, &reply); err != nil {
+		return "", err
+	}
+
+	if reply.Status != storagerpc.OK {
+		// TODO: storageserver should handle "wrong key range"
+		// for now, just return a new error
+		return "", errors.New("Key not found.")
+	}
+	return reply.Value, nil
 }
 
 func (ls *libstore) Put(key, value string) error {
-	return errors.New("not implemented")
+	args := &storagerpc.PutArgs{Key: key, Value: value}
+	var reply storagerpc.PutReply
+	if err := ls.storageCli.Call("StorageServer.Put", args, &reply); err != nil {
+		return err
+	}
+
+	if reply.Status != storagerpc.OK {
+		// TODO: storageserver should handle "wrong key range"
+		// for now, just return a new error
+		return errors.New("Wrong key range (shouldn't happen for checkpoint).")
+	}
+	return nil
 }
 
 func (ls *libstore) Delete(key string) error {
-	return errors.New("not implemented")
+	args := &storagerpc.DeleteArgs{Key: key}
+	var reply storagerpc.DeleteReply
+	if err := ls.storageCli.Call("StorageServer.Delete", args, &reply); err != nil {
+		return err
+	}
+
+	if reply.Status != storagerpc.OK {
+		// TODO: storageserver should handle "wrong key range"
+		// for now, just return a new error
+		return errors.New("Key not found.")
+	}
+	return nil
 }
 
 func (ls *libstore) GetList(key string) ([]string, error) {
-	return nil, errors.New("not implemented")
+	args := &storagerpc.GetArgs{Key: key, WantLease: false, HostPort: ls.myHostPort}
+	var reply storagerpc.GetListReply
+	if err := ls.storageCli.Call("StorageServer.GetList", args, &reply); err != nil {
+		return []string{}, err
+	}
+
+	if reply.Status != storagerpc.OK {
+		// TODO: storageserver should handle "wrong key range"
+		// for now, just return a new error
+		return []string{}, errors.New("Key not found.")
+	}
+	return reply.Value, nil
 }
 
 func (ls *libstore) RemoveFromList(key, removeItem string) error {
-	return errors.New("not implemented")
+	args := &storagerpc.PutArgs{Key: key, Value: removeItem}
+	var reply storagerpc.PutReply
+	if err := ls.storageCli.Call("StorageServer.RemoveFromList", args, &reply); err != nil {
+		return err
+	}
+
+	if reply.Status != storagerpc.OK {
+		// TODO: storageserver should handle "wrong key range"
+		// for now, just return a new error
+		return errors.New("Key not found.")
+	}
+	return nil
 }
 
 func (ls *libstore) AppendToList(key, newItem string) error {
-	return errors.New("not implemented")
+	args := &storagerpc.PutArgs{Key: key, Value: newItem}
+	var reply storagerpc.PutReply
+	if err := ls.storageCli.Call("StorageServer.AppendToList", args, &reply); err != nil {
+		return err
+	}
+
+	if reply.Status == storagerpc.WrongServer || reply.Status == storagerpc.ItemExists {
+		// TODO: storageserver should handle "wrong key range" separately
+		// for now, just return a new error
+		return errors.New("Wrong key range (shouldn't happen for checkpoint).")
+	}
+	return nil
 }
 
 func (ls *libstore) RevokeLease(args *storagerpc.RevokeLeaseArgs, reply *storagerpc.RevokeLeaseReply) error {
