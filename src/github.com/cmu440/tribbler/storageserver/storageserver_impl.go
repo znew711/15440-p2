@@ -11,16 +11,16 @@ import (
 )
 
 type storageServer struct {
-	Data             map[string][]byte
+	Data             map[string]string
+	ListData         map[string][]string
 	NodeId           uint32
 	NodesJoined      int
 	ExpectedNumNodes int
 	Nodes            []storagerpc.Node
 	Listener         *net.Listener
 	SlaveJoined      chan bool
+	Ready            bool
 }
-
-//hello world
 
 // NewStorageServer creates and starts a new StorageServer. masterServerHostPort
 // is the master storage server's host:port address. If empty, then this server
@@ -32,13 +32,15 @@ type storageServer struct {
 // and should return a non-nil error if the storage server could not be started.
 func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID uint32) (StorageServer, error) {
 	ss := storageServer{
-		Data:             make(map[string] []byte),
+		Data:             make(map[string] string),
+		ListData:         make(map[string] []string),
 		NodesJoined:      1,
 		ExpectedNumNodes: numNodes,
 		Nodes:            make([]storagerpc.Node, numNodes),
 		NodeId:           nodeID,
 		Listener:         nil,
 		SlaveJoined:      make(chan bool, 5),
+		Ready:            false,
 	}
 	rpc.RegisterName("StorageServer", storagerpc.Wrap(&ss))
 	rpc.HandleHTTP()
@@ -81,6 +83,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 				ss.Nodes = reply.Servers
 				notReady = false
 				ss.ExpectedNumNodes = len(reply.Servers)
+				ss.Ready = true
 			} else {
 				time.Sleep(time.Second)
 			}
@@ -111,27 +114,64 @@ func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *st
 }
 
 func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *storagerpc.GetServersReply) error {
-	return errors.New("not implemented")
+	if ss.Ready {
+		reply.Status = storagerpc.OK
+		reply.Servers = ss.Nodes
+		reply.Status = storagerpc.NotReady
+	} else {
+		reply.Status = storagerpc.NotReady
+	}
+	return nil
 }
 
 func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetReply) error {
-	return errors.New("not implemented")
+	i, ok := ss.Data[args.Key]
+	if !ok {
+		reply.Status = storagerpc.KeyNotFound
+	} else {
+		reply.Status = storagerpc.OK
+		reply.Value = i
+	}
+	return nil
 }
 
 func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.DeleteReply) error {
-	return errors.New("not implemented")
+	_, ok := ss.Data[args.Key]
+	if !ok {
+		reply.Status = storagerpc.KeyNotFound
+	} else {
+		delete(ss.Data, args.Key)
+	}
+	return nil
 }
 
 func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.GetListReply) error {
-	return errors.New("not implemented")
+	i, ok := ss.ListData[args.Key]
+	if !ok {
+		reply.Status = storagerpc.KeyNotFound
+	} else {
+		reply.Status = storagerpc.OK
+		reply.Value = i
+	}
+	return nil
 }
 
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	return errors.New("not implemented")
+	ss.Data[args.Key] = ss.Data[args.Value]
+	reply.Status = storagerpc.OK
+	return nil
 }
 
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	return errors.New("not implemented")
+	i, ok := ss.ListData[args.Key]
+	if !ok {
+		ss.ListData[args.Key] = []string{args.Value}
+		reply.Status = storagerpc.OK
+	} else {
+		ss.ListData[args.Key] = append(i, args.Value)
+		reply.Status = storagerpc.OK
+	}
+	return nil
 }
 
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
