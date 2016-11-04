@@ -117,7 +117,6 @@ func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *stor
 	if ss.Ready {
 		reply.Status = storagerpc.OK
 		reply.Servers = ss.Nodes
-		reply.Status = storagerpc.NotReady
 	} else {
 		reply.Status = storagerpc.NotReady
 	}
@@ -141,6 +140,7 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 		reply.Status = storagerpc.KeyNotFound
 	} else {
 		delete(ss.Data, args.Key)
+		reply.Status = storagerpc.OK
 	}
 	return nil
 }
@@ -157,19 +157,29 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 }
 
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	ss.Data[args.Key] = ss.Data[args.Value]
+	ss.Data[args.Key] = args.Value
 	reply.Status = storagerpc.OK
 	return nil
 }
 
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	i, ok := ss.ListData[args.Key]
+	list, ok := ss.ListData[args.Key]
 	if !ok {
 		ss.ListData[args.Key] = []string{args.Value}
 		reply.Status = storagerpc.OK
 	} else {
-		ss.ListData[args.Key] = append(i, args.Value)
-		reply.Status = storagerpc.OK
+		found := false
+		for i := 0; i < len(list); i++ {
+			if list[i] == args.Value {
+				found = true
+			}
+		}
+		if found {
+			reply.Status = storagerpc.ItemExists
+		} else {
+			ss.ListData[args.Key] = append(list, args.Value)
+			reply.Status = storagerpc.OK
+		}
 	}
 	return nil
 }
