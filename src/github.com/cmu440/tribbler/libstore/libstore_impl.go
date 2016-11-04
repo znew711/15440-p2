@@ -49,13 +49,11 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	libstore.masterServerHostPort = masterServerHostPort
 
     err := rpc.RegisterName("LeaseCallbacks", librpc.Wrap(libstore))
-    fmt.Println("registered")
     if err != nil {
         return nil, err
     }
 
 	cli, err := rpc.DialHTTP("tcp", masterServerHostPort)
-	fmt.Println("dialed")
     if err != nil {
 		return nil, err
 	}
@@ -89,7 +87,7 @@ func (ls *libstore) Put(key, value string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		return errors.New("Wrong key range (shouldn't happen for checkpoint).")
+		return fmt.Errorf("%d:Wrong key range (shouldn't happen for checkpoint).")
 	}
 	return nil
 }
@@ -134,7 +132,7 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		return errors.New("Key not found.")
+		return errors.New("Item not found.")
 	}
 	return nil
 }
@@ -146,10 +144,12 @@ func (ls *libstore) AppendToList(key, newItem string) error {
 		return err
 	}
 
-	if reply.Status == storagerpc.WrongServer || reply.Status == storagerpc.ItemExists {
+	if reply.Status == storagerpc.WrongServer {
 		// TODO: storageserver should handle "wrong key range" separately
 		// for now, just return a new error
-		return errors.New("Wrong key range (shouldn't happen for checkpoint).")
+		return errors.New("Wrong server.")
+	} else if reply.Status == storagerpc.ItemExists {
+		return errors.New("Item exists.")
 	}
 	return nil
 }
