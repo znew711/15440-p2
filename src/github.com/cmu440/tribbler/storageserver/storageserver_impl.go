@@ -1,7 +1,7 @@
 package storageserver
 
 import (
-	"errors"
+	//"errors"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
 	"net"
 	"net/http"
@@ -185,5 +185,26 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 }
 
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	return errors.New("not implemented")
+	_, ok := ss.ListData[args.Key]
+	if !ok {
+		reply.Status = storagerpc.ItemNotFound
+	} else {
+		found := false
+		for index, element := range ss.ListData[args.Key] {
+			if element == args.Value {
+				found = true
+			}
+			if found && index < len(ss.ListData[args.Key]) -1 {
+				ss.ListData[args.Key][index] = ss.ListData[args.Key][index + 1]
+			}
+		}
+		if found {
+			length := len(ss.ListData[args.Key])
+			ss.ListData[args.Key] = ss.ListData[args.Key][:length - 1]
+			reply.Status = storagerpc.OK
+		} else {
+			reply.Status = storagerpc.ItemNotFound
+		}
+	}
+	return nil
 }
