@@ -10,6 +10,9 @@ import (
 	"github.com/cmu440/tribbler/libstore"
 	"github.com/cmu440/tribbler/rpc/tribrpc"
 	"github.com/cmu440/tribbler/util"
+	"sort"
+	"strings"
+	"strconv"
 	"time"
 )
 
@@ -41,21 +44,13 @@ func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) 
     if err != nil {
         return nil, err
     }
-/*
-    cli, err := rpc.DialHTTP("tcp", masterServerHostPort)
-    if err != nil {
-		return nil, err
-	}
-    // Setup the HTTP handler that will serve incoming RPCs and
-    // serve requests in a background goroutine.
-*/
 
+    // create new libstore for communication with storage server
 	ls, err := libstore.NewLibstore(masterServerHostPort, myHostPort, libstore.Never)
 	tribServer.ls = ls
     rpc.HandleHTTP()
     go http.Serve(listener, nil)
 
-    //tribServer.storagecli = cli
     tribServer.listener = listener
 
 
@@ -63,17 +58,16 @@ func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) 
 }
 
 func (ts *tribServer) CreateUser(args *tribrpc.CreateUserArgs, reply *tribrpc.CreateUserReply) error {
-	//fmt.Println("Entering CreateUser")
 	userKey := util.FormatUserKey(args.UserID)
 	if _, err := ts.ls.Get(userKey); err == nil {
-		// key exists
+		// user already exists
 		reply.Status = tribrpc.Exists
-		return nil // TODO: maybe incorrect??? i'm not sure what errors to return
+		return nil
 	} 
 
 	err := ts.ls.Put(userKey, args.UserID) // just the user string??? what is the value of a user
 	if err != nil {
-		// put shouldn't return any errors that are visible to the tribserver?
+		// put shouldn't return any errors that are visible to the tribserver
 		return err
 	}
 
@@ -82,23 +76,23 @@ func (ts *tribServer) CreateUser(args *tribrpc.CreateUserArgs, reply *tribrpc.Cr
 }
 
 func (ts *tribServer) AddSubscription(args *tribrpc.SubscriptionArgs, reply *tribrpc.SubscriptionReply) error {
-	//fmt.Println("Entering AddSubscription")
 	sublistKey := util.FormatSubListKey(args.UserID)
 	sublistRKey := util.FormatSubListRKey(args.TargetUserID)
 	userKey := util.FormatUserKey(args.UserID)
 	targetKey := util.FormatUserKey(args.TargetUserID)
 
 	if _, err := ts.ls.Get(userKey); err != nil {
-		// key not found
+		// user not found
 		reply.Status = tribrpc.NoSuchUser
 		return nil
 	}
 	if _, err := ts.ls.Get(targetKey); err != nil {
-		// key not found
+		// user not found
 		reply.Status = tribrpc.NoSuchTargetUser
 		return nil
 	}
 
+	// add terget to user's sublist
 	err := ts.ls.AppendToList(sublistKey, args.TargetUserID)
 	if err != nil && err.Error() == "Item exists." {
 		reply.Status = tribrpc.Exists
@@ -106,6 +100,8 @@ func (ts *tribServer) AddSubscription(args *tribrpc.SubscriptionArgs, reply *tri
 	} else if err != nil {
 		return err
 	}
+
+	// mark user as subscribed to target
 	err = ts.ls.AppendToList(sublistRKey, args.UserID)
 	if err != nil {
 		return err
@@ -116,23 +112,23 @@ func (ts *tribServer) AddSubscription(args *tribrpc.SubscriptionArgs, reply *tri
 }
 
 func (ts *tribServer) RemoveSubscription(args *tribrpc.SubscriptionArgs, reply *tribrpc.SubscriptionReply) error {
-	//fmt.Println("Entering RemoveSubscription")
 	sublistKey := util.FormatSubListKey(args.UserID)
 	sublistRKey := util.FormatSubListRKey(args.TargetUserID)
 	userKey := util.FormatUserKey(args.UserID)
 	targetKey := util.FormatUserKey(args.TargetUserID)
 
 	if _, err := ts.ls.Get(userKey); err != nil {
-		// key not found
+		// user not found
 		reply.Status = tribrpc.NoSuchUser
 		return nil
 	}
 	if _, err := ts.ls.Get(targetKey); err != nil {
-		// key not found
+		// user not found
 		reply.Status = tribrpc.NoSuchTargetUser
 		return nil
 	}
 
+	// remove target from user's sublist
 	err := ts.ls.RemoveFromList(sublistKey, args.TargetUserID)
 	if err != nil && err.Error() == "Item not found." {
 		reply.Status = tribrpc.NoSuchTargetUser
@@ -140,6 +136,8 @@ func (ts *tribServer) RemoveSubscription(args *tribrpc.SubscriptionArgs, reply *
 	} else if err != nil {
 		return err
 	}
+
+	// remove user from target's subscribee list
 	err = ts.ls.RemoveFromList(sublistRKey, args.UserID)
 	if err != nil {
 		return err
@@ -149,7 +147,6 @@ func (ts *tribServer) RemoveSubscription(args *tribrpc.SubscriptionArgs, reply *
 }
 
 func (ts *tribServer) GetFriends(args *tribrpc.GetFriendsArgs, reply *tribrpc.GetFriendsReply) error {
-	//fmt.Println("Entering GetFriends")
 	userKey := util.FormatUserKey(args.UserID)
 	sublistKey := util.FormatSubListKey(args.UserID)
 	sublistRKey := util.FormatSubListRKey(args.UserID)
@@ -193,7 +190,6 @@ func (ts *tribServer) GetFriends(args *tribrpc.GetFriendsArgs, reply *tribrpc.Ge
 // as of now: triblistkey -> list of postkeys?? or do we need to hash?
 //   then, postkey -> json-encoded tribble
 func (ts *tribServer) PostTribble(args *tribrpc.PostTribbleArgs, reply *tribrpc.PostTribbleReply) error {
-	//fmt.Println("Entering PostTribble")
 	userKey := util.FormatUserKey(args.UserID)
 	if _, err := ts.ls.Get(userKey); err != nil {
 		// key not found
@@ -211,7 +207,6 @@ func (ts *tribServer) PostTribble(args *tribrpc.PostTribbleArgs, reply *tribrpc.
 
 	err = ts.ls.AppendToList(tribListKey, postKey)
 	if err != nil && err.Error() == "Item exists." {
-		// should this case even be here???
 		reply.Status = tribrpc.Exists
 		return nil
 	} else if err != nil {
@@ -220,7 +215,6 @@ func (ts *tribServer) PostTribble(args *tribrpc.PostTribbleArgs, reply *tribrpc.
 
 	err = ts.ls.Put(postKey, string(newTribble))
 	if err != nil && err.Error() == "Item exists." {
-		// should this case even be here???
 		reply.Status = tribrpc.Exists
 		return nil
 	} else if err != nil {
@@ -233,7 +227,6 @@ func (ts *tribServer) PostTribble(args *tribrpc.PostTribbleArgs, reply *tribrpc.
 }
 
 func (ts *tribServer) DeleteTribble(args *tribrpc.DeleteTribbleArgs, reply *tribrpc.DeleteTribbleReply) error {
-	//fmt.Println("Entering DeleteTribble")
 	userKey := util.FormatUserKey(args.UserID)
 	if _, err := ts.ls.Get(userKey); err != nil {
 		// key not found
@@ -244,7 +237,6 @@ func (ts *tribServer) DeleteTribble(args *tribrpc.DeleteTribbleArgs, reply *trib
 	tribListKey := util.FormatTribListKey(args.UserID)
 	err := ts.ls.RemoveFromList(tribListKey, args.PostKey)
 	if err != nil && err.Error() == "Item not found." {
-		// should this case even be here???
 		reply.Status = tribrpc.NoSuchPost
 		return nil
 	} else if err != nil {
@@ -253,7 +245,6 @@ func (ts *tribServer) DeleteTribble(args *tribrpc.DeleteTribbleArgs, reply *trib
 
 	err = ts.ls.Delete(args.PostKey)
 	if err != nil && err.Error() == "Key not found." {
-		// should this case even be here???
 		reply.Status = tribrpc.NoSuchPost
 		return nil
 	} else if err != nil {
@@ -266,7 +257,6 @@ func (ts *tribServer) DeleteTribble(args *tribrpc.DeleteTribbleArgs, reply *trib
 
 
 func (ts *tribServer) GetTribbles(args *tribrpc.GetTribblesArgs, reply *tribrpc.GetTribblesReply) error {
-	//fmt.Println("Entering GetTribbles")
 	userKey := util.FormatUserKey(args.UserID)
 	if _, err := ts.ls.Get(userKey); err != nil {
 		// key not found
@@ -290,7 +280,7 @@ func (ts *tribServer) GetTribbles(args *tribrpc.GetTribblesArgs, reply *tribrpc.
 	}
 
 	tribbles := []tribrpc.Tribble{}
-
+	// get actual tribbles using found postkeys
 	for i := 0; i < 100 && i < len(postKeys); i++ {
 		postKey := postKeys[i]
 		jsonTribble, err := ts.ls.Get(postKey)
@@ -298,7 +288,7 @@ func (ts *tribServer) GetTribbles(args *tribrpc.GetTribblesArgs, reply *tribrpc.
 			continue
 		}
 		if err != nil {
-			// soemthing has gone terribly wrong??
+			// something has gone terribly wrong??
 			return err
 		}
 
@@ -316,23 +306,77 @@ func (ts *tribServer) GetTribbles(args *tribrpc.GetTribblesArgs, reply *tribrpc.
 }
 
 func (ts *tribServer) GetTribblesBySubscription(args *tribrpc.GetTribblesArgs, reply *tribrpc.GetTribblesReply) error {
-	//fmt.Println("Entering GetTribblesBySubscription")
 	userKey := util.FormatUserKey(args.UserID)
 	if _, err := ts.ls.Get(userKey); err != nil {
-		// key not found
+		// user not=t found
 		reply.Status = tribrpc.NoSuchUser
 		return nil
 	}
 
 	subListKey := util.FormatSubListKey(args.UserID)
-	_, err := ts.ls.GetList(subListKey) // replace with subscribed once i write this
+	subscribed, err := ts.ls.GetList(subListKey)
 	if err != nil && err.Error() == "Key not found." {
-		// this is ok, user just hasn't posted
+		// this is ok, user just hasn't subscribed to anyone
 		reply.Status = tribrpc.OK
 		return nil
 	} else if err != nil {
 		return err
 	}
 
+	// get all post keys from all subscribed users
+	subscribedPostKeys := []string{}
+	for _, sub := range subscribed {
+		postKeys, err := ts.ls.GetList(util.FormatTribListKey(sub))
+		if err != nil && err.Error() == "Key not found." {
+			// this is ok, subscribed user just hasn't posted
+			continue
+		} else if err != nil {
+			return err
+		}
+		subscribedPostKeys = append(subscribedPostKeys, postKeys...)
+	}
+	// sort in reverse chronological order
+	sort.Sort(ByReverseTime(subscribedPostKeys))
+	// get a maximum of 100 keys 
+	if len(subscribedPostKeys) > 100 {
+		subscribedPostKeys = subscribedPostKeys[0:100]
+	}
+
+	// get corresponding tribbles
+	subscribedTribbles := []tribrpc.Tribble{}
+	for _, postKey := range subscribedPostKeys {
+		jsonTribble, err := ts.ls.Get(postKey)
+		if err != nil && err.Error() == "Key not found." {
+			// BUG: need to grab another possible tribble from subscribedpostkeys??
+			continue
+		}
+		if err != nil {
+			return err
+		}
+
+		tribble := tribrpc.Tribble{}
+		err = json.Unmarshal([]byte(jsonTribble), &tribble)
+		if err != nil {
+			return err
+		}
+		subscribedTribbles = append(subscribedTribbles, tribble)
+	}
+
+	reply.Status = tribrpc.OK
+	reply.Tribbles = subscribedTribbles
 	return nil
+}
+
+type ByReverseTime []string
+
+func (postKeys ByReverseTime) Len() int           { return len(postKeys) }
+func (postKeys ByReverseTime) Swap(i, j int)      { postKeys[i], postKeys[j] = postKeys[j], postKeys[i] }
+func (postKeys ByReverseTime) Less(i, j int) bool { 
+	postKey1 := strings.Split(postKeys[i], ":")[1]
+	postKey2 := strings.Split(postKeys[j], ":")[1]
+	time1, _ := strconv.ParseInt(strings.Split(postKey1, "_")[1], 16, 64)
+	time2, _ := strconv.ParseInt(strings.Split(postKey2, "_")[1], 16, 64)
+
+	// sort so that list is in REVERSE chronological order
+	return time1 > time2
 }
