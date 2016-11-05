@@ -18,6 +18,10 @@ func FormatSubListKey(userID string) string {
 	return fmt.Sprintf("%s:sublist", userID)
 }
 
+func FormatSubListRKey(userID string) string {
+	return fmt.Sprintf("%s:sublistR", userID)
+}
+
 // format key for a tribble post
 // example roc make a post => roc:post_time_srvId (time and srvId in %x)
 // srvId is a random number to break ties for post id, not perfect but will work with very high probability.
