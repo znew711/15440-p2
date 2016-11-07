@@ -2,7 +2,9 @@ package storageserver
 
 import (
 	//"errors"
+	"fmt"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
+	"github.com/cmu440/tribbler/libstore"
 	"net"
 	"net/http"
 	"net/rpc"
@@ -13,9 +15,10 @@ import (
 type storageServer struct {
 	Data             map[string]string
 	ListData         map[string][]string
-	NodeId           uint32
+	NodeID           uint32
 	NodesJoined      int
 	ExpectedNumNodes int
+	minHash          uint32
 	Nodes            []storagerpc.Node
 	Listener         *net.Listener
 	SlaveJoined      chan bool
@@ -37,7 +40,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		NodesJoined:      1,
 		ExpectedNumNodes: numNodes,
 		Nodes:            make([]storagerpc.Node, numNodes),
-		NodeId:           nodeID,
+		NodeID:           nodeID,
 		Listener:         nil,
 		SlaveJoined:      make(chan bool, 5),
 		Ready:            false,
@@ -64,6 +67,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 				}
 			}
 		}
+		ss.minHash = getMinHash(&ss)
 	} else {
 		//we are a slave
 		masterConn, err := rpc.DialHTTP("tcp", masterServerHostPort)
@@ -88,6 +92,8 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 				time.Sleep(time.Second)
 			}
 		}
+		ss.minHash = getMinHash(&ss)
+		ss.minHash = ss.NodeID
 	}
 	return &ss, nil
 }
@@ -124,6 +130,10 @@ func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *stor
 }
 
 func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetReply) error {
+	if !withinBounds(args.Key, ss) {
+		reply.Status = storagerpc.WrongServer
+		return nil
+	}
 	i, ok := ss.Data[args.Key]
 	if !ok {
 		reply.Status = storagerpc.KeyNotFound
@@ -135,6 +145,10 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 }
 
 func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.DeleteReply) error {
+	if !withinBounds(args.Key, ss) {
+		reply.Status = storagerpc.WrongServer
+		return nil
+	}
 	_, ok := ss.Data[args.Key]
 	if !ok {
 		reply.Status = storagerpc.KeyNotFound
@@ -146,6 +160,10 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 }
 
 func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.GetListReply) error {
+	if !withinBounds(args.Key, ss) {
+		reply.Status = storagerpc.WrongServer
+		return nil
+	}
 	i, ok := ss.ListData[args.Key]
 	if !ok {
 		reply.Status = storagerpc.KeyNotFound
@@ -157,12 +175,20 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 }
 
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
+	if !withinBounds(args.Key, ss) {
+		reply.Status = storagerpc.WrongServer
+		return nil
+	}
 	ss.Data[args.Key] = args.Value
 	reply.Status = storagerpc.OK
 	return nil
 }
 
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
+	if !withinBounds(args.Key, ss) {
+		reply.Status = storagerpc.WrongServer
+		return nil
+	}
 	list, ok := ss.ListData[args.Key]
 	if !ok {
 		ss.ListData[args.Key] = []string{args.Value}
@@ -185,6 +211,10 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 }
 
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
+	if !withinBounds(args.Key, ss) {
+		reply.Status = storagerpc.WrongServer
+		return nil
+	}
 	_, ok := ss.ListData[args.Key]
 	if !ok {
 		reply.Status = storagerpc.ItemNotFound
@@ -207,4 +237,40 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 		}
 	}
 	return nil
+}
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~helpers~~~~~~~~~~~~~~~~~~~~~
+
+func getMinHash(ss *storageServer) uint32 {
+	minHash := ss.NodeID
+	for i := 0; i < len(ss.Nodes); i++ {
+		currHash := ss.Nodes[i].NodeID
+		//hash is smaller than us
+		if currHash < ss.NodeID {
+			if ss.minHash >= ss.NodeID {
+				minHash = currHash
+			} else if currHash > minHash {
+				minHash = currHash
+			}
+		} else {
+			if ss.minHash >= ss.NodeID {
+				if currHash > minHash {
+					minHash = currHash
+				}
+			}
+		}
+	}
+	return minHash
+}
+
+func withinBounds(key string, ss *storageServer) bool {
+	fmt.Println("min: " + strconv.Itoa(int(ss.minHash)) + " max: " + strconv.Itoa(int(ss.NodeID)))
+	hash := libstore.StoreHash(key)
+	if ss.minHash == ss.NodeID {
+		return true
+	}
+	if ss.minHash < ss.NodeID {
+		return ss.minHash < hash && hash <= ss.NodeID
+	}
+	return hash <= ss.NodeID || hash >= ss.minHash
 }
