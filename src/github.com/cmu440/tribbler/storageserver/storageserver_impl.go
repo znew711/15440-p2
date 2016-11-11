@@ -3,14 +3,21 @@ package storageserver
 import (
 	//"errors"
 	"fmt"
-	"github.com/cmu440/tribbler/rpc/storagerpc"
 	"github.com/cmu440/tribbler/libstore"
+	"github.com/cmu440/tribbler/rpc/storagerpc"
 	"net"
 	"net/http"
 	"net/rpc"
 	"strconv"
 	"time"
 )
+
+type leaseStruct struct {
+	revokeInProgress bool
+	serverList       *list.List
+	GrantTime        Time
+	ExpireNextTime   bool
+}
 
 type storageServer struct {
 	Data             map[string]string
@@ -23,6 +30,9 @@ type storageServer struct {
 	Listener         *net.Listener
 	SlaveJoined      chan bool
 	Ready            bool
+	Timer            *time.Ticker
+	Leases           map[string]*leaseStruct
+	RevokeQueue      chan string
 }
 
 // NewStorageServer creates and starts a new StorageServer. masterServerHostPort
@@ -35,8 +45,8 @@ type storageServer struct {
 // and should return a non-nil error if the storage server could not be started.
 func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID uint32) (StorageServer, error) {
 	ss := storageServer{
-		Data:             make(map[string] string),
-		ListData:         make(map[string] []string),
+		Data:             make(map[string]string),
+		ListData:         make(map[string][]string),
 		NodesJoined:      1,
 		ExpectedNumNodes: numNodes,
 		Nodes:            make([]storagerpc.Node, numNodes),
@@ -44,6 +54,9 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		Listener:         nil,
 		SlaveJoined:      make(chan bool, 5),
 		Ready:            false,
+		Timer:            time.NewTicker(time.Duration(storagerpc.LeaseGuardSeconds) * time.Second),
+		Leases:           make(map[string]*leaseStruct),
+		RevokeQueue:      make(chan string),
 	}
 	rpc.RegisterName("StorageServer", storagerpc.Wrap(&ss))
 	rpc.HandleHTTP()
@@ -140,6 +153,9 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 	} else {
 		reply.Status = storagerpc.OK
 		reply.Value = i
+		if args.WantLease {
+
+		}
 	}
 	return nil
 }
@@ -224,13 +240,13 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 			if element == args.Value {
 				found = true
 			}
-			if found && index < len(ss.ListData[args.Key]) -1 {
-				ss.ListData[args.Key][index] = ss.ListData[args.Key][index + 1]
+			if found && index < len(ss.ListData[args.Key])-1 {
+				ss.ListData[args.Key][index] = ss.ListData[args.Key][index+1]
 			}
 		}
 		if found {
 			length := len(ss.ListData[args.Key])
-			ss.ListData[args.Key] = ss.ListData[args.Key][:length - 1]
+			ss.ListData[args.Key] = ss.ListData[args.Key][:length-1]
 			reply.Status = storagerpc.OK
 		} else {
 			reply.Status = storagerpc.ItemNotFound
@@ -264,7 +280,7 @@ func getMinHash(ss *storageServer) uint32 {
 }
 
 func withinBounds(key string, ss *storageServer) bool {
-	fmt.Println("min: " + strconv.Itoa(int(ss.minHash)) + " max: " + strconv.Itoa(int(ss.NodeID)))
+	//fmt.Println("min: " + strconv.Itoa(int(ss.minHash)) + " max: " + strconv.Itoa(int(ss.NodeID)))
 	hash := libstore.StoreHash(key)
 	if ss.minHash == ss.NodeID {
 		return true
@@ -273,4 +289,48 @@ func withinBounds(key string, ss *storageServer) bool {
 		return ss.minHash < hash && hash <= ss.NodeID
 	}
 	return hash <= ss.NodeID || hash >= ss.minHash
+}
+
+func eventHandler(ss *storateServer) {
+	for {
+		select {
+		case <-ss.Timer:
+			for k, v := range ss.Leases {
+				if time.Since(v.GrantTime) > storagerpc.LeaseSeconds {
+					if v.ExpireNextTime {
+						ss.RevokeQueue <- k
+						v.revokeInProgress = true
+					} else {
+						v.ExpireNextTime = true
+					}
+				}
+			}
+		case key := <-ss.RevokeQueue:
+			leases := ss.Leases[key]
+			for e := leases.serverList.Front(); e != nil; e = e.Next() {
+				hostport := e.Value.(string)
+				revokeConn, err := rpc.DialHTTP("tcp", hostport)
+				args := &storagerpc.RevokeLeaseArgs{
+					Key: hostport,
+				}
+				var reply storagerpc.RevokeLeaseReply
+				if err != nil {
+					leases.serverList.Remove(e)
+				}
+				if err := revokeConn.Call("Libstore.RevokeLease", args, &reply); err != nil {
+					leases.serverList.Remove(e)
+				}
+				if reply.Status == reply.OK {
+					leases.serverList.Remove(e)
+				} else {
+					//todo
+				}
+			}
+			if leases.serverList.Length() == 0 {
+				//todo
+			} else {
+				//todo
+			}
+		}
+	}
 }
