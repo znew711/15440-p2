@@ -48,6 +48,11 @@ type storageServer struct {
 // This function should return only once all storage servers have joined the ring,
 // and should return a non-nil error if the storage server could not be started.
 func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID uint32) (StorageServer, error) {
+	if masterServerHostPort == "" {
+		fmt.Println("New master")
+	} else {
+		fmt.Println("New slave")
+	}
 	ss := storageServer{
 		Data:             make(map[string]string),
 		ListData:         make(map[string][]string),
@@ -78,13 +83,16 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		for needMoreSlaves {
 			select {
 			case <-ss.SlaveJoined:
-				ss.NodesJoined += 1
+				fmt.Println("Master: I have a slave!")
+				fmt.Println("nodes needed: " + strconv.Itoa(numNodes) + " nodes now: " + strconv.Itoa(ss.NodesJoined))
 				if ss.NodesJoined == numNodes {
 					needMoreSlaves = false
 				}
 			}
 		}
+		ss.Ready = true
 		ss.minHash = getMinHash(&ss)
+		fmt.Println("master out!")
 	} else {
 		//we are a slave
 		masterConn, err := rpc.DialHTTP("tcp", masterServerHostPort)
@@ -97,19 +105,23 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		var reply storagerpc.RegisterReply
 		notReady := true
 		for notReady {
+			fmt.Println("Slave: time to register myself!")
 			if err := masterConn.Call("StorageServer.RegisterServer", args, &reply); err != nil {
 				return nil, err
 			}
 			if reply.Status == storagerpc.OK {
+				fmt.Println("Slave: master is ready!")
 				ss.Nodes = reply.Servers
 				notReady = false
 				ss.ExpectedNumNodes = len(reply.Servers)
 				ss.Ready = true
 			} else {
+				fmt.Println("Slave: master is not ready")
 				time.Sleep(time.Second)
 			}
 		}
 		ss.minHash = getMinHash(&ss)
+		fmt.Println("Slave out!")
 	}
 	return &ss, nil
 }
