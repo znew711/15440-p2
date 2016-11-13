@@ -208,6 +208,7 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 }
 
 func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.GetListReply) error {
+	//fmt.Println("entering get list")
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -245,6 +246,7 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 			}
 		}
 	}
+	//fmt.Println("leaving get list")
 	return nil
 }
 
@@ -265,6 +267,7 @@ func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutRepl
 }
 
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
+	//fmt.Println("entering AppendToList")
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -289,14 +292,16 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 				go handleRevoke(ss, args.Key, &callback)
 				<- callback
 			}
-			ss.ListData[args.Key] = append(list, args.Value)
+			ss.ListData[args.Key] = append(ss.ListData[args.Key], args.Value)
 			reply.Status = storagerpc.OK
 		}
 	}
+	//fmt.Println("return from AppendToList")
 	return nil
 }
 
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
+	//fmt.Println("entering RemoveFromList")
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -328,6 +333,7 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 			reply.Status = storagerpc.ItemNotFound
 		}
 	}
+	//fmt.Println("leaving RemoveFromList")
 	return nil
 }
 
@@ -395,22 +401,22 @@ func handleRevoke(ss *storageServer, key string, callback *(chan bool)) {
 				continue
 			}
 			//fmt.Println("about to call!")
-			if err := revokeConn.Call("LeaseCallbacks.RevokeLease", args, &reply); err != nil {
-				//fmt.Println("error!")
-				fmt.Println(err)
+			rpcFinish := revokeConn.Go("LeaseCallbacks.RevokeLease", args, &reply, nil)
+			timeout := time.NewTimer(time.Duration(storagerpc.LeaseSeconds + storagerpc.LeaseGuardSeconds) * time.Second - time.Since(subLease.GrantTime))
+			select {
+			case <- rpcFinish.Done:
+				if rpcFinish.Error != nil {
+					fmt.Println(err)
+					leases.serverList.Remove(e)
+				} else {
+					leases.serverList.Remove(e)
+				}
+				timeout.Stop()
+			case <- timeout.C:
 				leases.serverList.Remove(e)
-				continue
-			}
-			if reply.Status == storagerpc.OK {
-				//fmt.Println("it's good!")
-				leases.serverList.Remove(e)
-			} else {
-				//fmt.Println("what!")
-				//todo
 			}
 		}
 	}
 	delete(ss.Leases, key)
-	//fmt.Println("leaving revoke")
 	*callback <- true
 }
