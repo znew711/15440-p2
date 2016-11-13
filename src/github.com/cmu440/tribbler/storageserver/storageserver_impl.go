@@ -2,7 +2,8 @@ package storageserver
 
 import (
 	//"errors"
-	"fmt"
+	//"fmt"
+	"container/list"
 	"github.com/cmu440/tribbler/libstore"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
 	"net"
@@ -12,11 +13,14 @@ import (
 	"time"
 )
 
+type subLeaseStruct struct {
+	HostPort  string
+	GrantTime time.Time
+}
+
 type leaseStruct struct {
 	revokeInProgress bool
 	serverList       *list.List
-	GrantTime        Time
-	ExpireNextTime   bool
 }
 
 type storageServer struct {
@@ -106,7 +110,6 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 			}
 		}
 		ss.minHash = getMinHash(&ss)
-		ss.minHash = ss.NodeID
 	}
 	return &ss, nil
 }
@@ -154,7 +157,30 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 		reply.Status = storagerpc.OK
 		reply.Value = i
 		if args.WantLease {
-
+			val, ok := ss.Leases[args.Key]
+			if ok {
+				if val.revokeInProgress {
+					reply.Lease = storagerpc.Lease {false, 0}
+				} else {
+					reply.Lease = storagerpc.Lease{true, storagerpc.LeaseSeconds}
+					subLease := subLeaseStruct{
+						HostPort:  args.HostPort,
+						GrantTime: time.Now(),
+					}
+					val.serverList.PushBack(&subLease)
+				}
+			} else {
+				reply.Lease = storagerpc.Lease{true, storagerpc.LeaseSeconds}
+				ss.Leases[args.Key] = &leaseStruct{
+					revokeInProgress: false,
+					serverList:       list.New(),
+				}
+				subLease := subLeaseStruct{
+					HostPort:  args.HostPort,
+					GrantTime: time.Now(),
+				}
+				ss.Leases[args.Key].serverList.PushBack(&subLease)
+			}
 		}
 	}
 	return nil
@@ -170,6 +196,12 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 		reply.Status = storagerpc.KeyNotFound
 	} else {
 		delete(ss.Data, args.Key)
+		_, exists := ss.Leases[args.Key]
+		if exists{
+			callback := make(chan bool, 1)
+			go handleRevoke(ss, args.Key, &callback)
+			<- callback
+		}
 		reply.Status = storagerpc.OK
 	}
 	return nil
@@ -186,6 +218,32 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 	} else {
 		reply.Status = storagerpc.OK
 		reply.Value = i
+		if args.WantLease {
+			val, ok := ss.Leases[args.Key]
+			if ok {
+				if val.revokeInProgress {
+					reply.Lease = storagerpc.Lease{false, 0}
+				} else {
+					reply.Lease = storagerpc.Lease{true, storagerpc.LeaseSeconds}
+					subLease := subLeaseStruct{
+						HostPort:  args.HostPort,
+						GrantTime: time.Now(),
+					}
+					val.serverList.PushBack(&subLease)
+				}
+			} else {
+				reply.Lease = storagerpc.Lease{true, storagerpc.LeaseSeconds}
+				ss.Leases[args.Key] = &leaseStruct{
+					revokeInProgress: false,
+					serverList:       list.New(),
+				}
+				subLease := subLeaseStruct{
+					HostPort:  args.HostPort,
+					GrantTime: time.Now(),
+				}
+				ss.Leases[args.Key].serverList.PushBack(&subLease)
+			}
+		}
 	}
 	return nil
 }
@@ -194,6 +252,12 @@ func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutRepl
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
+	}
+	_, exists := ss.Leases[args.Key]
+	if exists {
+		callback := make(chan bool, 1)
+		go handleRevoke(ss, args.Key, &callback)
+		<- callback
 	}
 	ss.Data[args.Key] = args.Value
 	reply.Status = storagerpc.OK
@@ -221,6 +285,12 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 		} else {
 			ss.ListData[args.Key] = append(list, args.Value)
 			reply.Status = storagerpc.OK
+			_, exists := ss.Leases[args.Key]
+			if exists {
+				callback := make(chan bool, 1)
+				go handleRevoke(ss, args.Key, &callback)
+				<- callback
+			}
 		}
 	}
 	return nil
@@ -248,6 +318,12 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 			length := len(ss.ListData[args.Key])
 			ss.ListData[args.Key] = ss.ListData[args.Key][:length-1]
 			reply.Status = storagerpc.OK
+			_, exists := ss.Leases[args.Key]
+			if exists {
+				callback := make(chan bool, 1)
+				go handleRevoke(ss, args.Key, &callback)
+				<-callback
+			}
 		} else {
 			reply.Status = storagerpc.ItemNotFound
 		}
@@ -291,46 +367,33 @@ func withinBounds(key string, ss *storageServer) bool {
 	return hash <= ss.NodeID || hash >= ss.minHash
 }
 
-func eventHandler(ss *storateServer) {
-	for {
-		select {
-		case <-ss.Timer:
-			for k, v := range ss.Leases {
-				if time.Since(v.GrantTime) > storagerpc.LeaseSeconds {
-					if v.ExpireNextTime {
-						ss.RevokeQueue <- k
-						v.revokeInProgress = true
-					} else {
-						v.ExpireNextTime = true
-					}
-				}
+func handleRevoke(ss *storageServer, key string, callback *(chan bool)) {
+	leases := ss.Leases[key]
+	for leases.serverList.Len() != 0 {
+		for e := leases.serverList.Front(); e != nil; e = e.Next() {
+			subLease := e.Value.(*subLeaseStruct)
+			if time.Since(subLease.GrantTime) > storagerpc.LeaseSeconds+storagerpc.LeaseGuardSeconds {
+				leases.serverList.Remove(e)
+				continue
 			}
-		case key := <-ss.RevokeQueue:
-			leases := ss.Leases[key]
-			for e := leases.serverList.Front(); e != nil; e = e.Next() {
-				hostport := e.Value.(string)
-				revokeConn, err := rpc.DialHTTP("tcp", hostport)
-				args := &storagerpc.RevokeLeaseArgs{
-					Key: hostport,
-				}
-				var reply storagerpc.RevokeLeaseReply
-				if err != nil {
-					leases.serverList.Remove(e)
-				}
-				if err := revokeConn.Call("Libstore.RevokeLease", args, &reply); err != nil {
-					leases.serverList.Remove(e)
-				}
-				if reply.Status == reply.OK {
-					leases.serverList.Remove(e)
-				} else {
-					//todo
-				}
+			revokeConn, err := rpc.DialHTTP("tcp", subLease.HostPort)
+			args := &storagerpc.RevokeLeaseArgs{
+				Key: key,
 			}
-			if leases.serverList.Length() == 0 {
-				//todo
+			var reply storagerpc.RevokeLeaseReply
+			if err != nil {
+				leases.serverList.Remove(e)
+			}
+			if err := revokeConn.Call("Libstore.RevokeLease", args, &reply); err != nil {
+				leases.serverList.Remove(e)
+			}
+			if reply.Status == storagerpc.OK {
+				leases.serverList.Remove(e)
 			} else {
 				//todo
 			}
 		}
 	}
+	delete(ss.Leases, key)
+	*callback <- true
 }
