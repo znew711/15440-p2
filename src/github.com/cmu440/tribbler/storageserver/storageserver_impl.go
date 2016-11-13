@@ -2,7 +2,7 @@ package storageserver
 
 import (
 	//"errors"
-	//"fmt"
+	"fmt"
 	"container/list"
 	"github.com/cmu440/tribbler/libstore"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
@@ -195,13 +195,13 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 	if !ok {
 		reply.Status = storagerpc.KeyNotFound
 	} else {
-		delete(ss.Data, args.Key)
 		_, exists := ss.Leases[args.Key]
 		if exists{
 			callback := make(chan bool, 1)
 			go handleRevoke(ss, args.Key, &callback)
 			<- callback
 		}
+		delete(ss.Data, args.Key)
 		reply.Status = storagerpc.OK
 	}
 	return nil
@@ -283,14 +283,14 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 		if found {
 			reply.Status = storagerpc.ItemExists
 		} else {
-			ss.ListData[args.Key] = append(list, args.Value)
-			reply.Status = storagerpc.OK
 			_, exists := ss.Leases[args.Key]
 			if exists {
 				callback := make(chan bool, 1)
 				go handleRevoke(ss, args.Key, &callback)
 				<- callback
 			}
+			ss.ListData[args.Key] = append(list, args.Value)
+			reply.Status = storagerpc.OK
 		}
 	}
 	return nil
@@ -315,15 +315,15 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 			}
 		}
 		if found {
-			length := len(ss.ListData[args.Key])
-			ss.ListData[args.Key] = ss.ListData[args.Key][:length-1]
-			reply.Status = storagerpc.OK
 			_, exists := ss.Leases[args.Key]
 			if exists {
 				callback := make(chan bool, 1)
 				go handleRevoke(ss, args.Key, &callback)
 				<-callback
 			}
+			length := len(ss.ListData[args.Key])
+			ss.ListData[args.Key] = ss.ListData[args.Key][:length-1]
+			reply.Status = storagerpc.OK
 		} else {
 			reply.Status = storagerpc.ItemNotFound
 		}
@@ -334,6 +334,7 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~helpers~~~~~~~~~~~~~~~~~~~~~
 
 func getMinHash(ss *storageServer) uint32 {
+	fmt.Println("does this even get called")
 	minHash := ss.NodeID
 	for i := 0; i < len(ss.Nodes); i++ {
 		currHash := ss.Nodes[i].NodeID
@@ -357,6 +358,9 @@ func getMinHash(ss *storageServer) uint32 {
 
 func withinBounds(key string, ss *storageServer) bool {
 	//fmt.Println("min: " + strconv.Itoa(int(ss.minHash)) + " max: " + strconv.Itoa(int(ss.NodeID)))
+	if len(ss.Nodes) == 1 {
+		return true
+	}
 	hash := libstore.StoreHash(key)
 	if ss.minHash == ss.NodeID {
 		return true
@@ -368,12 +372,17 @@ func withinBounds(key string, ss *storageServer) bool {
 }
 
 func handleRevoke(ss *storageServer, key string, callback *(chan bool)) {
+	//fmt.Println("revoking key: " + key)
 	leases := ss.Leases[key]
+	leases.revokeInProgress = true
 	for leases.serverList.Len() != 0 {
+		//fmt.Println("entering lease loop")
 		for e := leases.serverList.Front(); e != nil; e = e.Next() {
 			subLease := e.Value.(*subLeaseStruct)
-			if time.Since(subLease.GrantTime) > storagerpc.LeaseSeconds+storagerpc.LeaseGuardSeconds {
+			if time.Since(subLease.GrantTime) > time.Duration(storagerpc.LeaseSeconds + storagerpc.LeaseGuardSeconds) * time.Second {
 				leases.serverList.Remove(e)
+				fmt.Println()
+				//fmt.Println("It has expired!")
 				continue
 			}
 			revokeConn, err := rpc.DialHTTP("tcp", subLease.HostPort)
@@ -383,17 +392,25 @@ func handleRevoke(ss *storageServer, key string, callback *(chan bool)) {
 			var reply storagerpc.RevokeLeaseReply
 			if err != nil {
 				leases.serverList.Remove(e)
+				continue
 			}
-			if err := revokeConn.Call("Libstore.RevokeLease", args, &reply); err != nil {
+			//fmt.Println("about to call!")
+			if err := revokeConn.Call("LeaseCallbacks.RevokeLease", args, &reply); err != nil {
+				//fmt.Println("error!")
+				fmt.Println(err)
 				leases.serverList.Remove(e)
+				continue
 			}
 			if reply.Status == storagerpc.OK {
+				//fmt.Println("it's good!")
 				leases.serverList.Remove(e)
 			} else {
+				//fmt.Println("what!")
 				//todo
 			}
 		}
 	}
 	delete(ss.Leases, key)
+	//fmt.Println("leaving revoke")
 	*callback <- true
 }
