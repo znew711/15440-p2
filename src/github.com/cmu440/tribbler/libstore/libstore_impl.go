@@ -5,17 +5,83 @@ import (
 	"fmt"
 	//"net"
 	//"net/http"
-	"net/rpc"
-	"github.com/cmu440/tribbler/rpc/storagerpc"
 	"github.com/cmu440/tribbler/rpc/librpc"
+	"github.com/cmu440/tribbler/rpc/storagerpc"
+	"net/rpc"
+	"time"
 )
+
+const UINT32_MAX uint32 = 4294967295
+
+// associate a ticker with each lease; have ticker notify every leaseguardseconds
+
+type cacheStringData struct {
+	value string
+	leaseSeconds int
+	timer *time.Timer
+}
+
+type cacheListData struct {
+	value []string
+	leaseSeconds int
+	timer *time.Timer
+}
 
 type libstore struct {
 	// TODO: implement this!
-	storageCli *rpc.Client
-	mode LeaseMode
+	storageCli           *rpc.Client
+	mode                 LeaseMode
 	masterServerHostPort string
-	myHostPort string
+	myHostPort           string
+	servers              []storagerpc.Node
+	stringCache		     map[string]*cacheStringData
+	listCache  			 map[string]*cacheListData
+}
+
+func clearStringCache (ls *libstore, key string) error {
+	for k, _ := range ls.stringCache {
+		if key == k {
+			delete(ls.stringCache, key)
+			return nil
+		}
+		
+	}
+	return errors.New("key not found in cache")
+}
+
+func clearListCache (ls *libstore, key string) error {
+	for k, _ := range ls.listCache {
+		if key == k {
+			delete(ls.listCache, key)
+			return nil
+		}
+	}
+	return errors.New("key not found in cache")
+}
+
+func findServer(ls *libstore, key string) (*rpc.Client, error) {
+	// hash upper is going to be the server we want, hash lower is just to make sure
+	//    we know the lower bound (do we even need the lower bound??)
+	hash := StoreHash(key)
+	hashUpper := UINT32_MAX
+	//hashLower := 0
+	var correctServer storagerpc.Node
+	for _, server := range ls.servers {
+		serverHash := server.NodeID
+		// TODO: check for wraparound!!
+		if hash <= serverHash && serverHash < hashUpper {
+			hashUpper = serverHash
+			correctServer = server
+		} 
+	}
+
+	fmt.Printf("%s\n", correctServer.HostPort)
+	cli, err := rpc.DialHTTP("tcp", correctServer.HostPort)
+	if err != nil {
+		return nil, err
+	}
+
+	return cli, nil
 }
 
 // NewLibstore creates a new instance of a TribServer's libstore. masterServerHostPort
@@ -48,22 +114,55 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	libstore.myHostPort = myHostPort
 	libstore.masterServerHostPort = masterServerHostPort
 
-    err := rpc.RegisterName("LeaseCallbacks", librpc.Wrap(libstore))
-    if err != nil {
-        return nil, err
-    }
+	err := rpc.RegisterName("LeaseCallbacks", librpc.Wrap(libstore))
+	if err != nil {
+		return nil, err
+	}
 
 	cli, err := rpc.DialHTTP("tcp", masterServerHostPort)
-    if err != nil {
+	if err != nil {
 		return nil, err
 	}
 	libstore.storageCli = cli
+
+	args := &storagerpc.GetServersArgs{}
+	var reply storagerpc.GetServersReply
+	numTries := 0
+	for ; numTries < 5; numTries++ {
+		if err := libstore.storageCli.Call("StorageServer.GetServers", args, &reply); err != nil {
+			return nil, err
+		}
+		if reply.Status == storagerpc.OK {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if numTries == 5 {
+		return nil, errors.New("Could not connect to storage server.")
+	}
+	libstore.servers = reply.Servers
+	fmt.Printf("length of server list: %d\n", len(reply.Servers))
+	libstore.stringCache = make(map[string]*cacheStringData)
+	libstore.listCache = make(map[string]*cacheListData)
 
 	return libstore, nil
 }
 
 func (ls *libstore) Get(key string) (string, error) {
+	for k, v := range ls.stringCache {
+		if k == key {
+			return v.value, nil
+		}
+	}
+
 	args := &storagerpc.GetArgs{Key: key, WantLease: false, HostPort: ls.myHostPort}
+	if ls.mode != Never { // TODO: fix to include normal mode
+		args.WantLease = true
+	}
+	/*cli, err := findServer(ls, key)
+	if err != nil {
+		return "", err
+	}*/
 	var reply storagerpc.GetReply
 	if err := ls.storageCli.Call("StorageServer.Get", args, &reply); err != nil {
 		return "", err
@@ -72,7 +171,20 @@ func (ls *libstore) Get(key string) (string, error) {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
+		fmt.Printf("error: %d\n", reply.Status)
 		return "", errors.New("Key not found.")
+	}
+	if ls.mode != Never {
+		lease := reply.Lease
+		if lease.Granted {
+			newData := &cacheStringData{
+				value: reply.Value,
+				leaseSeconds: lease.ValidSeconds,
+				timer: time.AfterFunc(time.Duration(lease.ValidSeconds) * time.Second, func() {
+					clearStringCache(ls,key)
+				})}
+			ls.stringCache[key] = newData
+		}
 	}
 	return reply.Value, nil
 }
@@ -80,6 +192,8 @@ func (ls *libstore) Get(key string) (string, error) {
 func (ls *libstore) Put(key, value string) error {
 	args := &storagerpc.PutArgs{Key: key, Value: value}
 	var reply storagerpc.PutReply
+
+	
 	if err := ls.storageCli.Call("StorageServer.Put", args, &reply); err != nil {
 		return err
 	}
@@ -87,8 +201,10 @@ func (ls *libstore) Put(key, value string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
+		fmt.Printf("error: %d\n", reply.Status)
 		return fmt.Errorf("%d:Wrong key range (shouldn't happen for checkpoint).")
 	}
+	
 	return nil
 }
 
@@ -102,13 +218,28 @@ func (ls *libstore) Delete(key string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
+		fmt.Printf("error: %d\n", reply.Status)
 		return errors.New("Key not found.")
 	}
 	return nil
 }
 
 func (ls *libstore) GetList(key string) ([]string, error) {
+	for k, v := range ls.listCache {
+		if k == key {
+			return v.value, nil
+		}
+	}
+
 	args := &storagerpc.GetArgs{Key: key, WantLease: false, HostPort: ls.myHostPort}
+	if ls.mode != Never {
+		args.WantLease = true
+	}
+	/*cli, err := findServer(ls, key)
+	if err != nil {
+		return []string{}, err
+	}*/
+
 	var reply storagerpc.GetListReply
 	if err := ls.storageCli.Call("StorageServer.GetList", args, &reply); err != nil {
 		return []string{}, err
@@ -117,7 +248,21 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
+		fmt.Printf("error: %d\n", reply.Status)
 		return []string{}, errors.New("Key not found.")
+	}
+
+	if ls.mode != Never {
+		lease := reply.Lease
+		if lease.Granted {
+			newData := &cacheListData{
+				value: reply.Value,
+				leaseSeconds: lease.ValidSeconds,
+				timer: time.AfterFunc(time.Duration(lease.ValidSeconds) * time.Second, func() {
+					clearListCache(ls,key)
+				})}
+			ls.listCache[key] = newData
+		}
 	}
 	return reply.Value, nil
 }
@@ -132,6 +277,7 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
+		fmt.Printf("error: %d\n", reply.Status)
 		return errors.New("Item not found.")
 	}
 	return nil
@@ -155,5 +301,24 @@ func (ls *libstore) AppendToList(key, newItem string) error {
 }
 
 func (ls *libstore) RevokeLease(args *storagerpc.RevokeLeaseArgs, reply *storagerpc.RevokeLeaseReply) error {
-	return errors.New("not implemented")
+	for k, _ := range ls.stringCache {
+		if k == args.Key {
+			if err := clearStringCache(ls, args.Key); err != nil {
+				return err
+			}
+			reply.Status = storagerpc.OK
+			return nil
+		}
+	}
+	for k, _ := range ls.listCache {
+		if k == args.Key {
+			if err := clearListCache(ls, args.Key); err != nil {
+				return err
+			}
+			reply.Status = storagerpc.OK
+			return nil
+		}
+	}
+	reply.Status = storagerpc.KeyNotFound 
+	return nil
 }
