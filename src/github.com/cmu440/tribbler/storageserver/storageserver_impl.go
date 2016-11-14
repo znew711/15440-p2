@@ -1,7 +1,7 @@
 package storageserver
 
 import (
-	//"errors"
+	"errors"
 	"fmt"
 	"container/list"
 	"github.com/cmu440/tribbler/libstore"
@@ -48,11 +48,6 @@ type storageServer struct {
 // This function should return only once all storage servers have joined the ring,
 // and should return a non-nil error if the storage server could not be started.
 func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID uint32) (StorageServer, error) {
-	if masterServerHostPort == "" {
-		fmt.Println("New master")
-	} else {
-		fmt.Println("New slave")
-	}
 	ss := storageServer{
 		Data:             make(map[string]string),
 		ListData:         make(map[string][]string),
@@ -71,6 +66,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 	rpc.HandleHTTP()
 	l, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
+		fmt.Println(err)
 		return nil, err
 	}
 	ss.Listener = &l
@@ -83,8 +79,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		for needMoreSlaves {
 			select {
 			case <-ss.SlaveJoined:
-				fmt.Println("Master: I have a slave!")
-				fmt.Println("nodes needed: " + strconv.Itoa(numNodes) + " nodes now: " + strconv.Itoa(ss.NodesJoined))
+				//fmt.Println("nodes needed: " + strconv.Itoa(numNodes) + " nodes now: " + strconv.Itoa(ss.NodesJoined))
 				if ss.NodesJoined == numNodes {
 					needMoreSlaves = false
 				}
@@ -92,12 +87,21 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		}
 		ss.Ready = true
 		ss.minHash = getMinHash(&ss)
-		fmt.Println("master out!")
 	} else {
 		//we are a slave
-		masterConn, err := rpc.DialHTTP("tcp", masterServerHostPort)
-		if err != nil {
-			return nil, err
+		var masterConn *rpc.Client = nil
+		for tryCount := 0; tryCount < 5; tryCount++ {
+			masterConn, err = rpc.DialHTTP("tcp", masterServerHostPort)
+			if err != nil {
+				//fmt.Println("SLAVE/MASTER ERROR 2 " + strconv.Itoa(int(nodeID)))
+				fmt.Println(err)
+				time.Sleep(time.Second)
+			} else {
+				break
+			}
+		}
+		if masterConn == nil {
+			return nil, errors.New("Connection refused too many times.")
 		}
 		args := &storagerpc.RegisterArgs{
 			ServerInfo: storagerpc.Node{"localhost:" + strconv.Itoa(port), nodeID},
@@ -105,23 +109,22 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		var reply storagerpc.RegisterReply
 		notReady := true
 		for notReady {
-			fmt.Println("Slave: time to register myself!")
+			//fmt.Println("Slave: time to register myself! " + strconv.Itoa(int(ss.NodeID)))
 			if err := masterConn.Call("StorageServer.RegisterServer", args, &reply); err != nil {
 				return nil, err
 			}
 			if reply.Status == storagerpc.OK {
-				fmt.Println("Slave: master is ready!")
+				//fmt.Println("Slave: master is ready! " + strconv.Itoa(int(ss.NodeID)))
 				ss.Nodes = reply.Servers
 				notReady = false
 				ss.ExpectedNumNodes = len(reply.Servers)
 				ss.Ready = true
 			} else {
-				fmt.Println("Slave: master is not ready")
+				//fmt.Println("Slave: master is not ready " + strconv.Itoa(int(ss.NodeID)))
 				time.Sleep(time.Second)
 			}
 		}
 		ss.minHash = getMinHash(&ss)
-		fmt.Println("Slave out!")
 	}
 	return &ss, nil
 }
@@ -129,11 +132,12 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *storagerpc.RegisterReply) error {
 	found := false
 	for i := 0; i < ss.ExpectedNumNodes; i++ {
-		if ss.Nodes[i].HostPort == args.ServerInfo.HostPort {
+		if ss.Nodes[i].NodeID == args.ServerInfo.NodeID {
 			found = true
 		}
 	}
 	if !found {
+		//fmt.Println("registering new server " + strconv.Itoa(int(args.ServerInfo.NodeID)))
 		ss.Nodes[ss.NodesJoined] = args.ServerInfo
 		ss.NodesJoined += 1
 	}
@@ -352,7 +356,6 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~helpers~~~~~~~~~~~~~~~~~~~~~
 
 func getMinHash(ss *storageServer) uint32 {
-	fmt.Println("does this even get called")
 	minHash := ss.NodeID
 	for i := 0; i < len(ss.Nodes); i++ {
 		currHash := ss.Nodes[i].NodeID
