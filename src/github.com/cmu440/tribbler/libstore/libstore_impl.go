@@ -205,7 +205,7 @@ func (ls *libstore) Get(key string) (string, error) {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		fmt.Printf("error: %d\n", reply.Status)
+		//fmt.Printf("error: %d\n", reply.Status)
 		return "", errors.New("Key not found.")
 	}
 	if ls.mode != Never {
@@ -240,7 +240,7 @@ func (ls *libstore) Put(key, value string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		fmt.Printf("error: %d\n", reply.Status)
+		//fmt.Printf("error: %d\n", reply.Status)
 		return fmt.Errorf("Wrong key range (shouldn't happen for checkpoint).")
 	}
 
@@ -262,7 +262,7 @@ func (ls *libstore) Delete(key string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		fmt.Printf("error: %d\n", reply.Status)
+		//fmt.Printf("error: %d\n", reply.Status)
 		return errors.New("Key not found.")
 	}
 	return nil
@@ -322,7 +322,7 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		fmt.Printf("error: %d\n", reply.Status)
+		//fmt.Printf("error: %d\n", reply.Status)
 		return []string{}, errors.New("Key not found.")
 	}
 
@@ -357,7 +357,7 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		fmt.Printf("error: %d\n", reply.Status)
+		//fmt.Printf("error: %d\n", reply.Status)
 		return errors.New("Item not found.")
 	}
 	return nil

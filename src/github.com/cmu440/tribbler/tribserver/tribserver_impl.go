@@ -4,9 +4,6 @@ import (
 	"errors"
 	"encoding/json"
 	"fmt"
-	"net"
-	"net/http"
-	"net/rpc"
 	"github.com/cmu440/tribbler/libstore"
 	"github.com/cmu440/tribbler/rpc/tribrpc"
 	"github.com/cmu440/tribbler/util"
@@ -37,6 +34,7 @@ type tribServer struct {
 // For hints on how to properly setup RPC, see the rpc/tribrpc package.
 func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) {
 	l := log.New(os.Stderr, "", 0)
+	l.Println("new tribserver")
 	tribServer := new(tribServer)
 
     // Create the server socket that will listen for incoming RPCs.
@@ -58,7 +56,7 @@ func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) 
     connected := false
     var ls libstore.Libstore
 	for numTries := 0; numTries < 5; numTries++ {
-		ls, err = libstore.NewLibstore(masterServerHostPort, myHostPort, libstore.Normal)
+		ls, err = libstore.NewLibstore(masterServerHostPort, myHostPort, libstore.Never)
 		if err != nil {
 			time.Sleep(1 * time.Second)
 		} else {
@@ -75,7 +73,6 @@ func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) 
     rpc.HandleHTTP()
     go http.Serve(listener, nil)
 
-    l.Println("Help")
     tribServer.listener = listener
 
 	return tribServer, nil
