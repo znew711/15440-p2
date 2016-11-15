@@ -355,7 +355,9 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 		if found {
 			reply.Status = storagerpc.ItemExists
 		} else {
+			ss.LeasesMutex.Lock()
 			_, exists := ss.Leases[args.Key]
+			ss.LeasesMutex.Unlock()
 			if exists {
 				callback := make(chan bool, 1)
 				ss.RevokeQueue <- revokeStruct{args.Key, &callback}
