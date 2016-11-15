@@ -33,6 +33,12 @@ type cacheListData struct {
 	timer *time.Timer
 }
 
+type accessInfo struct {
+	key string
+	lastAccess time.Time
+	accessCount int
+}
+
 type libstore struct {
 	storageCli           *rpc.Client
 	mode                 LeaseMode
@@ -41,6 +47,7 @@ type libstore struct {
 	servers              []*ssInfo
 	stringCache		     map[string]*cacheStringData
 	listCache  			 map[string]*cacheListData
+	keyAccesses          []*accessInfo
 }
 
 func clearStringCache (ls *libstore, key string) error {
@@ -87,7 +94,7 @@ func findServer(ls *libstore, key string) (*rpc.Client, error) {
 	}*/
 	if correctServer == nil {
 		// for now, try the master server?
-		fmt.Println("here")
+		//fmt.Println("here")
 		correctServer = ls.storageCli
 	}
 	return correctServer, nil
@@ -168,6 +175,7 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 
 	libstore.stringCache = make(map[string]*cacheStringData)
 	libstore.listCache = make(map[string]*cacheListData)
+	libstore.keyAccesses = []*accessInfo{}
 
 	return libstore, nil
 }
@@ -179,16 +187,46 @@ func (ls *libstore) Get(key string) (string, error) {
 		}
 	}
 
-	args := &storagerpc.GetArgs{Key: key, WantLease: false, HostPort: ls.myHostPort}
-	if ls.mode != Never { // TODO: fix to include normal mode
-		args.WantLease = true
+	// look up key in list of keys, see how many times it's been accessed
+	keyFound := false
+	requestLease := false
+	if ls.mode == Always {
+		requestLease = true
 	}
+	for _, keyAccess := range ls.keyAccesses {
+		if keyAccess.key == key {
+			keyFound = true
+			currentTime := time.Now()
+			if currentTime.Sub(keyAccess.lastAccess) < (storagerpc.QueryCacheSeconds * time.Second) {
+				keyAccess.accessCount++
+				if keyAccess.accessCount >= storagerpc.QueryCacheThresh && ls.myHostPort != "" {
+					requestLease = true
+					keyAccess.accessCount = 0 // reset???
+				}
+			} else {
+				// has been too much time, don't request a lease
+				keyAccess.accessCount = 0
+			}
+			keyAccess.lastAccess = currentTime
+			break
+		}
+	}
+
+	if !keyFound {
+		newKey := &accessInfo{
+			key: key,
+			lastAccess: time.Now(),
+			accessCount: 1}
+		ls.keyAccesses = append(ls.keyAccesses, newKey)
+	}
+
+	args := &storagerpc.GetArgs{Key: key, WantLease: requestLease, HostPort: ls.myHostPort}
+
 	cli, err := findServer(ls, key)
 	if err != nil {
 		return "", err
 	}
 	var reply storagerpc.GetReply
-	// MUSTFIX: SEGFAULT (cli is nil?)
 	if err := cli.Call("StorageServer.Get", args, &reply); err != nil {
 		return "", err
 	}
@@ -264,10 +302,40 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 		}
 	}
 
-	args := &storagerpc.GetArgs{Key: key, WantLease: false, HostPort: ls.myHostPort}
-	if ls.mode != Never {
-		args.WantLease = true
+	// look up key in list of keys, see how many times it's been accessed
+	keyFound := false
+	requestLease := false
+	if ls.mode == Always {
+		requestLease = true
 	}
+	for _, keyAccess := range ls.keyAccesses {
+		if keyAccess.key == key {
+			keyFound = true
+			currentTime := time.Now()
+			if currentTime.Sub(keyAccess.lastAccess) < (storagerpc.QueryCacheSeconds * time.Second) {
+				keyAccess.accessCount++
+				if keyAccess.accessCount >= storagerpc.QueryCacheThresh && ls.myHostPort != "" {
+					requestLease = true
+					keyAccess.accessCount = 0 // reset???
+				}
+			} else {
+				// has been too much time, don't request a lease
+				keyAccess.accessCount = 0
+			}
+			keyAccess.lastAccess = currentTime
+			break
+		}
+	}
+
+	if !keyFound {
+		newKey := &accessInfo{
+			key: key,
+			lastAccess: time.Now(),
+			accessCount: 1}
+		ls.keyAccesses = append(ls.keyAccesses, newKey)
+	}
+
+	args := &storagerpc.GetArgs{Key: key, WantLease: requestLease, HostPort: ls.myHostPort}
 	cli, err := findServer(ls, key)
 	if err != nil {
 		return []string{}, err
