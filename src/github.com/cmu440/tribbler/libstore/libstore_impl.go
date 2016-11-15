@@ -9,6 +9,7 @@ import (
 	"github.com/cmu440/tribbler/rpc/storagerpc"
 	"net/rpc"
 	"time"
+	"sync"
 )
 
 const UINT32_MAX uint32 = 4294967295
@@ -33,6 +34,12 @@ type cacheListData struct {
 	timer *time.Timer
 }
 
+type accessInfo struct {
+	key string
+	lastAccess time.Time
+	accessCount int
+}
+
 type libstore struct {
 	storageCli           *rpc.Client
 	mode                 LeaseMode
@@ -41,56 +48,9 @@ type libstore struct {
 	servers              []*ssInfo
 	stringCache		     map[string]*cacheStringData
 	listCache  			 map[string]*cacheListData
-}
-
-func clearStringCache (ls *libstore, key string) error {
-	for k, _ := range ls.stringCache {
-		if key == k {
-			delete(ls.stringCache, key)
-			return nil
-		}
-		
-	}
-	return errors.New("key not found in cache")
-}
-
-func clearListCache (ls *libstore, key string) error {
-	for k, _ := range ls.listCache {
-		if key == k {
-			delete(ls.listCache, key)
-			return nil
-		}
-	}
-	return errors.New("key not found in cache")
-}
-
-func findServer(ls *libstore, key string) (*rpc.Client, error) {
-	// hash upper is going to be the server we want, hash lower is just to make sure
-	//    we know the lower bound (do we even need the lower bound??)
-	hash := StoreHash(key)
-	hashUpper := UINT32_MAX
-	//hashLower := 0
-	var correctServer *rpc.Client
-	for _, server := range ls.servers {
-		serverHash := server.nodeID
-		// TODO: check for wraparound!!
-		if hash <= serverHash && serverHash < hashUpper {
-			hashUpper = serverHash
-			correctServer = server.cli
-		} 
-	}
-
-	//fmt.Printf("%s\n", correctServer.HostPort)
-	/*cli, err := rpc.DialHTTP("tcp", correctServer.HostPort)
-	if err != nil {
-		return nil, err
-	}*/
-	if correctServer == nil {
-		// for now, try the master server?
-		fmt.Println("here")
-		correctServer = ls.storageCli
-	}
-	return correctServer, nil
+	keyAccesses          []*accessInfo
+	stringMutex          *sync.Mutex
+	listMutex            *sync.Mutex
 }
 
 // NewLibstore creates a new instance of a TribServer's libstore. masterServerHostPort
@@ -168,6 +128,7 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 
 	libstore.stringCache = make(map[string]*cacheStringData)
 	libstore.listCache = make(map[string]*cacheListData)
+	libstore.keyAccesses = []*accessInfo{}
 
 	return libstore, nil
 }
@@ -179,16 +140,46 @@ func (ls *libstore) Get(key string) (string, error) {
 		}
 	}
 
-	args := &storagerpc.GetArgs{Key: key, WantLease: false, HostPort: ls.myHostPort}
-	if ls.mode != Never { // TODO: fix to include normal mode
-		args.WantLease = true
+	// look up key in list of keys, see how many times it's been accessed
+	keyFound := false
+	requestLease := false
+	if ls.mode == Always {
+		requestLease = true
 	}
+	for _, keyAccess := range ls.keyAccesses {
+		if keyAccess.key == key {
+			keyFound = true
+			currentTime := time.Now()
+			if currentTime.Sub(keyAccess.lastAccess) < (storagerpc.QueryCacheSeconds * time.Second) {
+				keyAccess.accessCount++
+				if keyAccess.accessCount >= storagerpc.QueryCacheThresh && ls.myHostPort != "" {
+					requestLease = true
+					keyAccess.accessCount = 0 // reset???
+				}
+			} else {
+				// has been too much time, don't request a lease
+				keyAccess.accessCount = 0
+			}
+			keyAccess.lastAccess = currentTime
+			break
+		}
+	}
+
+	if !keyFound {
+		newKey := &accessInfo{
+			key: key,
+			lastAccess: time.Now(),
+			accessCount: 1}
+		ls.keyAccesses = append(ls.keyAccesses, newKey)
+	}
+
+	args := &storagerpc.GetArgs{Key: key, WantLease: requestLease, HostPort: ls.myHostPort}
+
 	cli, err := findServer(ls, key)
 	if err != nil {
 		return "", err
 	}
 	var reply storagerpc.GetReply
-	// MUSTFIX: SEGFAULT (cli is nil?)
 	if err := cli.Call("StorageServer.Get", args, &reply); err != nil {
 		return "", err
 	}
@@ -208,7 +199,9 @@ func (ls *libstore) Get(key string) (string, error) {
 				timer: time.AfterFunc(time.Duration(lease.ValidSeconds) * time.Second, func() {
 					clearStringCache(ls,key)
 				})}
+			ls.stringMutex.Lock()
 			ls.stringCache[key] = newData
+			ls.stringMutex.Unlock()
 		}
 	}
 	return reply.Value, nil
@@ -264,10 +257,40 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 		}
 	}
 
-	args := &storagerpc.GetArgs{Key: key, WantLease: false, HostPort: ls.myHostPort}
-	if ls.mode != Never {
-		args.WantLease = true
+	// look up key in list of keys, see how many times it's been accessed
+	keyFound := false
+	requestLease := false
+	if ls.mode == Always {
+		requestLease = true
 	}
+	for _, keyAccess := range ls.keyAccesses {
+		if keyAccess.key == key {
+			keyFound = true
+			currentTime := time.Now()
+			if currentTime.Sub(keyAccess.lastAccess) < (storagerpc.QueryCacheSeconds * time.Second) {
+				keyAccess.accessCount++
+				if keyAccess.accessCount >= storagerpc.QueryCacheThresh && ls.myHostPort != "" {
+					requestLease = true
+					keyAccess.accessCount = 0 // reset???
+				}
+			} else {
+				// has been too much time, don't request a lease
+				keyAccess.accessCount = 0
+			}
+			keyAccess.lastAccess = currentTime
+			break
+		}
+	}
+
+	if !keyFound {
+		newKey := &accessInfo{
+			key: key,
+			lastAccess: time.Now(),
+			accessCount: 1}
+		ls.keyAccesses = append(ls.keyAccesses, newKey)
+	}
+
+	args := &storagerpc.GetArgs{Key: key, WantLease: requestLease, HostPort: ls.myHostPort}
 	cli, err := findServer(ls, key)
 	if err != nil {
 		return []string{}, err
@@ -294,7 +317,9 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 				timer: time.AfterFunc(time.Duration(lease.ValidSeconds) * time.Second, func() {
 					clearListCache(ls,key)
 				})}
+			ls.listMutex.Lock()
 			ls.listCache[key] = newData
+			ls.listMutex.Unlock()
 		}
 	}
 	return reply.Value, nil
@@ -362,4 +387,58 @@ func (ls *libstore) RevokeLease(args *storagerpc.RevokeLeaseArgs, reply *storage
 	}
 	reply.Status = storagerpc.KeyNotFound 
 	return nil
+}
+
+func clearStringCache (ls *libstore, key string) error {
+	for k, _ := range ls.stringCache {
+		if key == k {
+			ls.stringMutex.Lock()
+			delete(ls.stringCache, key)
+			ls.stringMutex.Unlock()
+			return nil
+		}
+		
+	}
+	return errors.New("key not found in cache")
+}
+
+func clearListCache (ls *libstore, key string) error {
+	for k, _ := range ls.listCache {
+		if key == k {
+			ls.listMutex.Lock()
+			delete(ls.listCache, key)
+			ls.listMutex.Unlock()
+			return nil
+		}
+	}
+	return errors.New("key not found in cache")
+}
+
+func findServer(ls *libstore, key string) (*rpc.Client, error) {
+	// hash upper is going to be the server we want, hash lower is just to make sure
+	//    we know the lower bound (do we even need the lower bound??)
+	hash := StoreHash(key)
+	hashUpper := UINT32_MAX
+	//hashLower := 0
+	var correctServer *rpc.Client
+	for _, server := range ls.servers {
+		serverHash := server.nodeID
+		// TODO: check for wraparound!!
+		if hash <= serverHash && serverHash < hashUpper {
+			hashUpper = serverHash
+			correctServer = server.cli
+		} 
+	}
+
+	//fmt.Printf("%s\n", correctServer.HostPort)
+	/*cli, err := rpc.DialHTTP("tcp", correctServer.HostPort)
+	if err != nil {
+		return nil, err
+	}*/
+	if correctServer == nil {
+		// for now, try the master server?
+		//fmt.Println("here")
+		correctServer = ls.storageCli
+	}
+	return correctServer, nil
 }
