@@ -3,25 +3,25 @@ package tribserver
 import (
 	//"errors"
 	"encoding/json"
-	//"fmt"
-	"net"
-	"net/http"
-	"net/rpc"
+	"fmt"
 	"github.com/cmu440/tribbler/libstore"
 	"github.com/cmu440/tribbler/rpc/tribrpc"
 	"github.com/cmu440/tribbler/util"
+	"net"
+	"net/http"
+	"net/rpc"
 	"sort"
-	"strings"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type tribServer struct {
 	// TODO: implement this!
 	//tribserver *rpc.Server
-	listener net.Listener
+	listener   net.Listener
 	storagecli *rpc.Client
-	ls libstore.Libstore
+	ls         libstore.Libstore
 }
 
 // NewTribServer creates, starts and returns a new TribServer. masterServerHostPort
@@ -33,37 +33,42 @@ type tribServer struct {
 func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) {
 	tribServer := new(tribServer)
 
-    // Create the server socket that will listen for incoming RPCs.
-    listener, err := net.Listen("tcp", myHostPort)
-    if err != nil {
-        return nil, err
-    }
+	// Create the server socket that will listen for incoming RPCs.
+	listener, err := net.Listen("tcp", myHostPort)
+	if err != nil {
+		return nil, err
+	}
 
-    // Wrap the tribServer before registering it for RPC.
-    err = rpc.RegisterName("TribServer", tribrpc.Wrap(tribServer))
-    if err != nil {
-        return nil, err
-    }
+	// Wrap the tribServer before registering it for RPC.
+	err = rpc.RegisterName("TribServer", tribrpc.Wrap(tribServer))
+	if err != nil {
+		return nil, err
+	}
 
-    // create new libstore for communication with storage server
+	// create new libstore for communication with storage server
 	ls, err := libstore.NewLibstore(masterServerHostPort, myHostPort, libstore.Never)
+	if err != nil {
+		fmt.Println(err)
+	}
 	tribServer.ls = ls
-    rpc.HandleHTTP()
-    go http.Serve(listener, nil)
+	rpc.HandleHTTP()
+	go http.Serve(listener, nil)
 
-    tribServer.listener = listener
-
+	tribServer.listener = listener
 
 	return tribServer, nil
 }
 
 func (ts *tribServer) CreateUser(args *tribrpc.CreateUserArgs, reply *tribrpc.CreateUserReply) error {
 	userKey := util.FormatUserKey(args.UserID)
+	if ts.ls == nil {
+		fmt.Println("FATAL ERROR ABORT ABORT")
+	}
 	if _, err := ts.ls.Get(userKey); err == nil {
 		// user already exists
 		reply.Status = tribrpc.Exists
 		return nil
-	} 
+	}
 
 	err := ts.ls.Put(userKey, args.UserID) // just the user string??? what is the value of a user
 	if err != nil {
@@ -173,11 +178,11 @@ func (ts *tribServer) GetFriends(args *tribrpc.GetFriendsArgs, reply *tribrpc.Ge
 		return err
 	}
 	var friends []string
-	var subscribedMap = make(map[string] bool)
-	for _, elem := range(subscribedList) {
+	var subscribedMap = make(map[string]bool)
+	for _, elem := range subscribedList {
 		subscribedMap[elem] = true
 	}
-	for _, elem := range(subscribeeList) {
+	for _, elem := range subscribeeList {
 		if _, ok := subscribedMap[elem]; ok == true {
 			friends = append(friends, elem)
 		}
@@ -255,7 +260,6 @@ func (ts *tribServer) DeleteTribble(args *tribrpc.DeleteTribbleArgs, reply *trib
 	return nil
 }
 
-
 func (ts *tribServer) GetTribbles(args *tribrpc.GetTribblesArgs, reply *tribrpc.GetTribblesReply) error {
 	userKey := util.FormatUserKey(args.UserID)
 	if _, err := ts.ls.Get(userKey); err != nil {
@@ -274,9 +278,9 @@ func (ts *tribServer) GetTribbles(args *tribrpc.GetTribblesArgs, reply *tribrpc.
 		return err
 	}
 	// reverse postkeys to get them in reverse chronological order
-	for i := len(postKeys)/2-1; i >= 0; i-- {
-	    opp := len(postKeys)-1-i
-	    postKeys[i], postKeys[opp] = postKeys[opp], postKeys[i]
+	for i := len(postKeys)/2 - 1; i >= 0; i-- {
+		opp := len(postKeys) - 1 - i
+		postKeys[i], postKeys[opp] = postKeys[opp], postKeys[i]
 	}
 
 	tribbles := []tribrpc.Tribble{}
@@ -337,7 +341,7 @@ func (ts *tribServer) GetTribblesBySubscription(args *tribrpc.GetTribblesArgs, r
 	}
 	// sort in reverse chronological order
 	sort.Sort(ByReverseTime(subscribedPostKeys))
-	// get a maximum of 100 keys 
+	// get a maximum of 100 keys
 	if len(subscribedPostKeys) > 100 {
 		subscribedPostKeys = subscribedPostKeys[0:100]
 	}
@@ -369,9 +373,9 @@ func (ts *tribServer) GetTribblesBySubscription(args *tribrpc.GetTribblesArgs, r
 
 type ByReverseTime []string
 
-func (postKeys ByReverseTime) Len() int           { return len(postKeys) }
-func (postKeys ByReverseTime) Swap(i, j int)      { postKeys[i], postKeys[j] = postKeys[j], postKeys[i] }
-func (postKeys ByReverseTime) Less(i, j int) bool { 
+func (postKeys ByReverseTime) Len() int      { return len(postKeys) }
+func (postKeys ByReverseTime) Swap(i, j int) { postKeys[i], postKeys[j] = postKeys[j], postKeys[i] }
+func (postKeys ByReverseTime) Less(i, j int) bool {
 	postKey1 := strings.Split(postKeys[i], ":")[1]
 	postKey2 := strings.Split(postKeys[j], ":")[1]
 	time1, _ := strconv.ParseInt(strings.Split(postKey1, "_")[1], 16, 64)

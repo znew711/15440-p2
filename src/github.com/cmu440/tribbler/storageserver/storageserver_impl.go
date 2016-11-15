@@ -1,9 +1,9 @@
 package storageserver
 
 import (
+	"container/list"
 	"errors"
 	"fmt"
-	"container/list"
 	"github.com/cmu440/tribbler/libstore"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
 	"net"
@@ -82,7 +82,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 	if masterServerHostPort == "" {
 		//master
 		ss.Nodes[0] = storagerpc.Node{"localhost:" + strconv.Itoa(port), nodeID}
-		needMoreSlaves := true
+		needMoreSlaves := numNodes > 1
 		for needMoreSlaves {
 			select {
 			case <-ss.SlaveJoined:
@@ -187,7 +187,7 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 			ss.LeasesMutex.Unlock()
 			if ok {
 				if val.revokeInProgress {
-					reply.Lease = storagerpc.Lease {false, 0}
+					reply.Lease = storagerpc.Lease{false, 0}
 				} else {
 					reply.Lease = storagerpc.Lease{true, storagerpc.LeaseSeconds}
 					subLease := subLeaseStruct{
@@ -229,10 +229,10 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 		ss.LeasesMutex.Lock()
 		_, exists := ss.Leases[args.Key]
 		ss.LeasesMutex.Unlock()
-		if exists{
+		if exists {
 			callback := make(chan bool, 1)
 			go handleRevoke(ss, args.Key, &callback)
-			<- callback
+			<-callback
 		}
 		ss.DataMutex.Lock()
 		delete(ss.Data, args.Key)
@@ -302,7 +302,7 @@ func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutRepl
 	if exists {
 		callback := make(chan bool, 1)
 		go handleRevoke(ss, args.Key, &callback)
-		<- callback
+		<-callback
 	}
 	ss.DataMutex.Lock()
 	ss.Data[args.Key] = args.Value
@@ -339,7 +339,7 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 			if exists {
 				callback := make(chan bool, 1)
 				go handleRevoke(ss, args.Key, &callback)
-				<- callback
+				<-callback
 			}
 			ss.ListDataMutex.Lock()
 			ss.ListData[args.Key] = append(ss.ListData[args.Key], args.Value)
@@ -446,7 +446,7 @@ func handleRevoke(ss *storageServer, key string, callback *(chan bool)) {
 		//fmt.Println("entering lease loop")
 		for e := leases.serverList.Front(); e != nil; e = e.Next() {
 			subLease := e.Value.(*subLeaseStruct)
-			if time.Since(subLease.GrantTime) > time.Duration(storagerpc.LeaseSeconds + storagerpc.LeaseGuardSeconds) * time.Second {
+			if time.Since(subLease.GrantTime) > time.Duration(storagerpc.LeaseSeconds+storagerpc.LeaseGuardSeconds)*time.Second {
 				leases.serverList.Remove(e)
 				fmt.Println()
 				//fmt.Println("It has expired!")
@@ -463,9 +463,9 @@ func handleRevoke(ss *storageServer, key string, callback *(chan bool)) {
 			}
 			//fmt.Println("about to call!")
 			rpcFinish := revokeConn.Go("LeaseCallbacks.RevokeLease", args, &reply, nil)
-			timeout := time.NewTimer(time.Duration(storagerpc.LeaseSeconds + storagerpc.LeaseGuardSeconds) * time.Second - time.Since(subLease.GrantTime))
+			timeout := time.NewTimer(time.Duration(storagerpc.LeaseSeconds+storagerpc.LeaseGuardSeconds)*time.Second - time.Since(subLease.GrantTime))
 			select {
-			case <- rpcFinish.Done:
+			case <-rpcFinish.Done:
 				if rpcFinish.Error != nil {
 					fmt.Println(err)
 					leases.serverList.Remove(e)
@@ -473,7 +473,7 @@ func handleRevoke(ss *storageServer, key string, callback *(chan bool)) {
 					leases.serverList.Remove(e)
 				}
 				timeout.Stop()
-			case <- timeout.C:
+			case <-timeout.C:
 				leases.serverList.Remove(e)
 			}
 		}

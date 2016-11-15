@@ -8,8 +8,8 @@ import (
 	"github.com/cmu440/tribbler/rpc/librpc"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
 	"net/rpc"
-	"time"
 	"sync"
+	"time"
 )
 
 const UINT32_MAX uint32 = 4294967295
@@ -18,25 +18,25 @@ const UINT32_MAX uint32 = 4294967295
 //    make a struct of storagerpc.Node, conn
 type ssInfo struct {
 	hostPort string
-	nodeID uint32
-	cli *rpc.Client
+	nodeID   uint32
+	cli      *rpc.Client
 }
 
 type cacheStringData struct {
-	value string
+	value        string
 	leaseSeconds int
-	timer *time.Timer
+	timer        *time.Timer
 }
 
 type cacheListData struct {
-	value []string
+	value        []string
 	leaseSeconds int
-	timer *time.Timer
+	timer        *time.Timer
 }
 
 type accessInfo struct {
-	key string
-	lastAccess time.Time
+	key         string
+	lastAccess  time.Time
 	accessCount int
 }
 
@@ -46,8 +46,8 @@ type libstore struct {
 	masterServerHostPort string
 	myHostPort           string
 	servers              []*ssInfo
-	stringCache		     map[string]*cacheStringData
-	listCache  			 map[string]*cacheListData
+	stringCache          map[string]*cacheStringData
+	listCache            map[string]*cacheListData
 	keyAccesses          []*accessInfo
 	stringMutex          *sync.Mutex
 	listMutex            *sync.Mutex
@@ -120,8 +120,8 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 		}
 		ss := &ssInfo{
 			hostPort: node.HostPort,
-			nodeID: node.NodeID,
-			cli: cli}
+			nodeID:   node.NodeID,
+			cli:      cli}
 		ssList = append(ssList, ss)
 	}
 	libstore.servers = ssList
@@ -167,8 +167,8 @@ func (ls *libstore) Get(key string) (string, error) {
 
 	if !keyFound {
 		newKey := &accessInfo{
-			key: key,
-			lastAccess: time.Now(),
+			key:         key,
+			lastAccess:  time.Now(),
 			accessCount: 1}
 		ls.keyAccesses = append(ls.keyAccesses, newKey)
 	}
@@ -194,10 +194,10 @@ func (ls *libstore) Get(key string) (string, error) {
 		lease := reply.Lease
 		if lease.Granted {
 			newData := &cacheStringData{
-				value: reply.Value,
+				value:        reply.Value,
 				leaseSeconds: lease.ValidSeconds,
-				timer: time.AfterFunc(time.Duration(lease.ValidSeconds) * time.Second, func() {
-					clearStringCache(ls,key)
+				timer: time.AfterFunc(time.Duration(lease.ValidSeconds)*time.Second, func() {
+					clearStringCache(ls, key)
 				})}
 			ls.stringMutex.Lock()
 			ls.stringCache[key] = newData
@@ -225,7 +225,7 @@ func (ls *libstore) Put(key, value string) error {
 		fmt.Printf("error: %d\n", reply.Status)
 		return fmt.Errorf("Wrong key range (shouldn't happen for checkpoint).")
 	}
-	
+
 	return nil
 }
 
@@ -284,8 +284,8 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 
 	if !keyFound {
 		newKey := &accessInfo{
-			key: key,
-			lastAccess: time.Now(),
+			key:         key,
+			lastAccess:  time.Now(),
 			accessCount: 1}
 		ls.keyAccesses = append(ls.keyAccesses, newKey)
 	}
@@ -312,10 +312,10 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 		lease := reply.Lease
 		if lease.Granted {
 			newData := &cacheListData{
-				value: reply.Value,
+				value:        reply.Value,
 				leaseSeconds: lease.ValidSeconds,
-				timer: time.AfterFunc(time.Duration(lease.ValidSeconds) * time.Second, func() {
-					clearListCache(ls,key)
+				timer: time.AfterFunc(time.Duration(lease.ValidSeconds)*time.Second, func() {
+					clearListCache(ls, key)
 				})}
 			ls.listMutex.Lock()
 			ls.listCache[key] = newData
@@ -385,11 +385,11 @@ func (ls *libstore) RevokeLease(args *storagerpc.RevokeLeaseArgs, reply *storage
 			return nil
 		}
 	}
-	reply.Status = storagerpc.KeyNotFound 
+	reply.Status = storagerpc.KeyNotFound
 	return nil
 }
 
-func clearStringCache (ls *libstore, key string) error {
+func clearStringCache(ls *libstore, key string) error {
 	for k, _ := range ls.stringCache {
 		if key == k {
 			ls.stringMutex.Lock()
@@ -397,12 +397,12 @@ func clearStringCache (ls *libstore, key string) error {
 			ls.stringMutex.Unlock()
 			return nil
 		}
-		
+
 	}
 	return errors.New("key not found in cache")
 }
 
-func clearListCache (ls *libstore, key string) error {
+func clearListCache(ls *libstore, key string) error {
 	for k, _ := range ls.listCache {
 		if key == k {
 			ls.listMutex.Lock()
@@ -427,7 +427,7 @@ func findServer(ls *libstore, key string) (*rpc.Client, error) {
 		if hash <= serverHash && serverHash < hashUpper {
 			hashUpper = serverHash
 			correctServer = server.cli
-		} 
+		}
 	}
 
 	//fmt.Printf("%s\n", correctServer.HostPort)
