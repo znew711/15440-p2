@@ -1,9 +1,12 @@
 package tribserver
 
 import (
-	//"errors"
+	"errors"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
+	"net/rpc"
 	"github.com/cmu440/tribbler/libstore"
 	"github.com/cmu440/tribbler/rpc/tribrpc"
 	"github.com/cmu440/tribbler/util"
@@ -14,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"log"
+	"os"
 )
 
 type tribServer struct {
@@ -31,30 +36,47 @@ type tribServer struct {
 //
 // For hints on how to properly setup RPC, see the rpc/tribrpc package.
 func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) {
+	l := log.New(os.Stderr, "", 0)
 	tribServer := new(tribServer)
 
-	// Create the server socket that will listen for incoming RPCs.
-	listener, err := net.Listen("tcp", myHostPort)
-	if err != nil {
-		return nil, err
+    // Create the server socket that will listen for incoming RPCs.
+    listener, err := net.Listen("tcp", myHostPort)
+    if err != nil {
+    	fmt.Println("listen fails")
+        return nil, err
+    }
+
+    // Wrap the tribServer before registering it for RPC.
+    err = rpc.RegisterName("TribServer", tribrpc.Wrap(tribServer))
+    if err != nil {
+    	fmt.Println("could not register tribserver")
+        return nil, err
+    }
+
+    // create new libstore for communication with storage server
+   	//var ls libstore.Libstore
+    connected := false
+    var ls libstore.Libstore
+	for numTries := 0; numTries < 5; numTries++ {
+		ls, err = libstore.NewLibstore(masterServerHostPort, myHostPort, libstore.Normal)
+		if err != nil {
+			time.Sleep(1 * time.Second)
+		} else {
+			tribServer.ls = ls
+			connected = true
+			break
+		}
+	}
+	if !connected {
+		fmt.Println("could not find storage server")
+		return nil, errors.New("Libstore could not connect to storage server.")
 	}
 
-	// Wrap the tribServer before registering it for RPC.
-	err = rpc.RegisterName("TribServer", tribrpc.Wrap(tribServer))
-	if err != nil {
-		return nil, err
-	}
+    rpc.HandleHTTP()
+    go http.Serve(listener, nil)
 
-	// create new libstore for communication with storage server
-	ls, err := libstore.NewLibstore(masterServerHostPort, myHostPort, libstore.Never)
-	if err != nil {
-		fmt.Println(err)
-	}
-	tribServer.ls = ls
-	rpc.HandleHTTP()
-	go http.Serve(listener, nil)
-
-	tribServer.listener = listener
+    l.Println("Help")
+    tribServer.listener = listener
 
 	return tribServer, nil
 }

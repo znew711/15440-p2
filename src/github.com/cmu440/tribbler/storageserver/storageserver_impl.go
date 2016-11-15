@@ -73,7 +73,6 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 	rpc.HandleHTTP()
 	l, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
-		fmt.Println(err)
 		return nil, err
 	}
 	ss.Listener = &l
@@ -86,29 +85,18 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		for needMoreSlaves {
 			select {
 			case <-ss.SlaveJoined:
-				//fmt.Println("nodes needed: " + strconv.Itoa(numNodes) + " nodes now: " + strconv.Itoa(ss.NodesJoined))
+				ss.NodesJoined += 1
 				if ss.NodesJoined == numNodes {
 					needMoreSlaves = false
 				}
 			}
 		}
-		ss.Ready = true
 		ss.minHash = getMinHash(&ss)
 	} else {
 		//we are a slave
-		var masterConn *rpc.Client = nil
-		for tryCount := 0; tryCount < 5; tryCount++ {
-			masterConn, err = rpc.DialHTTP("tcp", masterServerHostPort)
-			if err != nil {
-				//fmt.Println("SLAVE/MASTER ERROR 2 " + strconv.Itoa(int(nodeID)))
-				fmt.Println(err)
-				time.Sleep(time.Second)
-			} else {
-				break
-			}
-		}
-		if masterConn == nil {
-			return nil, errors.New("Connection refused too many times.")
+		masterConn, err := rpc.DialHTTP("tcp", masterServerHostPort)
+		if err != nil {
+			return nil, err
 		}
 		args := &storagerpc.RegisterArgs{
 			ServerInfo: storagerpc.Node{"localhost:" + strconv.Itoa(port), nodeID},
@@ -116,18 +104,15 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		var reply storagerpc.RegisterReply
 		notReady := true
 		for notReady {
-			//fmt.Println("Slave: time to register myself! " + strconv.Itoa(int(ss.NodeID)))
 			if err := masterConn.Call("StorageServer.RegisterServer", args, &reply); err != nil {
 				return nil, err
 			}
 			if reply.Status == storagerpc.OK {
-				//fmt.Println("Slave: master is ready! " + strconv.Itoa(int(ss.NodeID)))
 				ss.Nodes = reply.Servers
 				notReady = false
 				ss.ExpectedNumNodes = len(reply.Servers)
 				ss.Ready = true
 			} else {
-				//fmt.Println("Slave: master is not ready " + strconv.Itoa(int(ss.NodeID)))
 				time.Sleep(time.Second)
 			}
 		}
@@ -139,12 +124,11 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *storagerpc.RegisterReply) error {
 	found := false
 	for i := 0; i < ss.ExpectedNumNodes; i++ {
-		if ss.Nodes[i].NodeID == args.ServerInfo.NodeID {
+		if ss.Nodes[i].HostPort == args.ServerInfo.HostPort {
 			found = true
 		}
 	}
 	if !found {
-		//fmt.Println("registering new server " + strconv.Itoa(int(args.ServerInfo.NodeID)))
 		ss.Nodes[ss.NodesJoined] = args.ServerInfo
 		ss.NodesJoined += 1
 	}
@@ -243,7 +227,6 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 }
 
 func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.GetListReply) error {
-	//fmt.Println("entering get list")
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -287,7 +270,6 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 			}
 		}
 	}
-	//fmt.Println("leaving get list")
 	return nil
 }
 
@@ -312,7 +294,6 @@ func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutRepl
 }
 
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	//fmt.Println("entering AppendToList")
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -344,15 +325,13 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 			ss.ListDataMutex.Lock()
 			ss.ListData[args.Key] = append(ss.ListData[args.Key], args.Value)
 			ss.ListDataMutex.Unlock()
-			reply.Status = storagerpc.OK
+			ss.ListData[args.Key] = append(list, args.Value)
 		}
 	}
-	//fmt.Println("return from AppendToList")
 	return nil
 }
 
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	//fmt.Println("entering RemoveFromList")
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -392,13 +371,13 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 			reply.Status = storagerpc.ItemNotFound
 		}
 	}
-	//fmt.Println("leaving RemoveFromList")
 	return nil
 }
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~helpers~~~~~~~~~~~~~~~~~~~~~
 
 func getMinHash(ss *storageServer) uint32 {
+	fmt.Println("does this even get called")
 	minHash := ss.NodeID
 	for i := 0; i < len(ss.Nodes); i++ {
 		currHash := ss.Nodes[i].NodeID
@@ -475,6 +454,9 @@ func handleRevoke(ss *storageServer, key string, callback *(chan bool)) {
 				timeout.Stop()
 			case <-timeout.C:
 				leases.serverList.Remove(e)
+			} else {
+				//fmt.Println("what!")
+				//todo
 			}
 		}
 	}

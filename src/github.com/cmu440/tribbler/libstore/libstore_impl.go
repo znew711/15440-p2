@@ -8,8 +8,11 @@ import (
 	"github.com/cmu440/tribbler/rpc/librpc"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
 	"net/rpc"
-	"sync"
 	"time"
+	"strings"
+	"sync"
+	"log"
+	"os"
 )
 
 const UINT32_MAX uint32 = 4294967295
@@ -78,37 +81,50 @@ type libstore struct {
 // need to create a brand new HTTP handler to serve the requests (the Libstore may
 // simply reuse the TribServer's HTTP handler since the two run in the same process).
 func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libstore, error) {
+
+	l := log.New(os.Stderr, "", 0)
+	l.Println("newlibstore called")
+
 	libstore := new(libstore)
 	libstore.mode = mode
 	libstore.myHostPort = myHostPort
 	libstore.masterServerHostPort = masterServerHostPort
 
 	err := rpc.RegisterName("LeaseCallbacks", librpc.Wrap(libstore))
-	if err != nil {
+	if err != nil && !strings.Contains(err.Error(), "service already defined") {
+		l.Println(err)
 		return nil, err
 	}
 
 	cli, err := rpc.DialHTTP("tcp", masterServerHostPort)
 	if err != nil {
+		l.Println(err)
+		l.Println("could not reach master server")
 		return nil, err
 	}
 	libstore.storageCli = cli
 
 	args := &storagerpc.GetServersArgs{}
 	var reply storagerpc.GetServersReply
-	numTries := 0
-	for ; numTries < 5; numTries++ {
+	connected := false
+	for numTries := 0; numTries < 5; numTries++ {
 		if err := libstore.storageCli.Call("StorageServer.GetServers", args, &reply); err != nil {
+			l.Println("get servers fails")
 			return nil, err
 		}
 		if reply.Status == storagerpc.OK {
+			fmt.Println(reply.Status)
+			connected = true
 			break
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(2 * time.Second)
 	}
-	if numTries == 5 {
+	if !connected {
+		fmt.Println("libstore:123 could not connect to storage server after 5 tries")
+		cli.Close()
 		return nil, errors.New("Could not connect to storage server.")
 	}
+	//time.Sleep(1*time.Second)
 
 	//libstore.servers = reply.Servers
 	fmt.Printf("length of server list: %d\n", len(reply.Servers))
@@ -129,6 +145,8 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	libstore.stringCache = make(map[string]*cacheStringData)
 	libstore.listCache = make(map[string]*cacheListData)
 	libstore.keyAccesses = []*accessInfo{}
+	libstore.stringMutex = &sync.Mutex{}
+	libstore.listMutex = &sync.Mutex{}
 
 	return libstore, nil
 }

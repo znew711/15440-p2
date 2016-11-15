@@ -41,15 +41,15 @@ TRIB_SERVER=$GOPATH/bin/trunner
 function startStorageServers {
     N=${#STORAGE_ID[@]}
     # Start master storage server.
-    ${STORAGE_SERVER} -N=${N} -id=${STORAGE_ID[0]} -port=${STORAGE_PORT} &> /dev/null &
+    ${STORAGE_SERVER} -N=${N} -id=${STORAGE_ID[0]} -port=${STORAGE_PORT} &
     STORAGE_SERVER_PID[0]=$!
     # Start slave storage servers.
     if [ "$N" -gt 1 ]
     then
         for i in `seq 1 $((N - 1))`
         do
-	    STORAGE_SLAVE_PORT=$(((RANDOM % 10000) + 10000))
-            ${STORAGE_SERVER} -port=${STORAGE_SLAVE_PORT} -id=${STORAGE_ID[$i]} -master="localhost:${STORAGE_PORT}" &> /dev/null &
+        STORAGE_SLAVE_PORT=$(((RANDOM % 10000) + 10000))
+            ${STORAGE_SERVER} -port=${STORAGE_SLAVE_PORT} -id=${STORAGE_ID[$i]} -master="localhost:${STORAGE_PORT}" &
             STORAGE_SERVER_PID[$i]=$!
         done
     fi
@@ -70,7 +70,7 @@ function startTribServers {
     do
         # Pick random port between [10000, 20000).
         TRIB_PORT[$i]=$(((RANDOM % 10000) + 10000))
-        ${TRIB_SERVER} -port=${TRIB_PORT[$i]} "localhost:${STORAGE_PORT}" &> /dev/null &
+        ${TRIB_SERVER} -port=${TRIB_PORT[$i]} "localhost:${STORAGE_PORT}" &
         TRIB_SERVER_PID[$i]=$!
     done
     sleep 5
@@ -99,7 +99,7 @@ function testStress {
             ${STRESS_CLIENT} -port=${TRIB_PORT[$((C % M))]} -clientId=${CLIENT} ${USER} ${K} & 
             STRESS_CLIENT_PID[$C]=$!
             # Setup background thread to kill client upon timeout.
-            sleep ${TIMEOUT} && kill -9 ${STRESS_CLIENT_PID[$C]} &> /dev/null &
+            sleep ${TIMEOUT} && kill -9 ${STRESS_CLIENT_PID[$C]} &
             C=$((C + 1))
         done
     done
@@ -134,7 +134,7 @@ function testStressSingleClientSingleTribSingleStorage {
     STORAGE_ID=('0')
     M=1
     CLIENT_COUNT=('1')
-    TIMEOUT=15
+    TIMEOUT=30
     testStress
 }
 
