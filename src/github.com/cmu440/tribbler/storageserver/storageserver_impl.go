@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/cmu440/tribbler/libstore"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
+	"hash/fnv"
 	"net"
 	"net/http"
 	"net/rpc"
@@ -24,6 +25,11 @@ type leaseStruct struct {
 	serverList       *list.List
 }
 
+type revokeStruct struct {
+	Key      string
+	Callback *chan bool
+}
+
 type storageServer struct {
 	Data             map[string]string
 	DataMutex        *sync.Mutex
@@ -40,7 +46,8 @@ type storageServer struct {
 	Timer            *time.Ticker
 	Leases           map[string]*leaseStruct
 	LeasesMutex      *sync.Mutex
-	RevokeQueue      chan string
+	RevokeQueue      chan revokeStruct
+	WriteLocks       []sync.Mutex
 }
 
 // NewStorageServer creates and starts a new StorageServer. masterServerHostPort
@@ -67,7 +74,8 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		Timer:            time.NewTicker(time.Duration(storagerpc.LeaseGuardSeconds) * time.Second),
 		Leases:           make(map[string]*leaseStruct),
 		LeasesMutex:      &sync.Mutex{},
-		RevokeQueue:      make(chan string),
+		RevokeQueue:      make(chan revokeStruct),
+		WriteLocks:       make([]sync.Mutex, 10),
 	}
 	rpc.RegisterName("StorageServer", storagerpc.Wrap(&ss))
 	rpc.HandleHTTP()
@@ -133,6 +141,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		}
 		ss.minHash = getMinHash(&ss)
 	}
+	go handleRevoke(&ss)
 	return &ss, nil
 }
 
@@ -169,6 +178,7 @@ func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *stor
 }
 
 func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetReply) error {
+	//fmt.Println("entering Get")
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -212,10 +222,13 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 			}
 		}
 	}
+	//fmt.Println("leaving get")
 	return nil
 }
 
 func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.DeleteReply) error {
+	//fmt.Println("entering delete")
+	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Lock()
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -231,7 +244,7 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 		ss.LeasesMutex.Unlock()
 		if exists {
 			callback := make(chan bool, 1)
-			go handleRevoke(ss, args.Key, &callback)
+			ss.RevokeQueue <- revokeStruct{args.Key, &callback}
 			<-callback
 		}
 		ss.DataMutex.Lock()
@@ -239,6 +252,8 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 		ss.DataMutex.Unlock()
 		reply.Status = storagerpc.OK
 	}
+	//fmt.Println("leaving delete")
+	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
 	return nil
 }
 
@@ -292,6 +307,8 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 }
 
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
+	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Lock()
+	//fmt.Println("entering Put "  + args.Key + " " + args.Value)
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -301,17 +318,20 @@ func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutRepl
 	ss.LeasesMutex.Unlock()
 	if exists {
 		callback := make(chan bool, 1)
-		go handleRevoke(ss, args.Key, &callback)
+		ss.RevokeQueue <- revokeStruct{args.Key, &callback}
 		<-callback
 	}
 	ss.DataMutex.Lock()
 	ss.Data[args.Key] = args.Value
 	ss.DataMutex.Unlock()
 	reply.Status = storagerpc.OK
+	//fmt.Println("Leaving put "  + args.Key + " " + args.Value)
+	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
 	return nil
 }
 
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
+	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Lock()
 	//fmt.Println("entering AppendToList")
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
@@ -338,7 +358,7 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 			_, exists := ss.Leases[args.Key]
 			if exists {
 				callback := make(chan bool, 1)
-				go handleRevoke(ss, args.Key, &callback)
+				ss.RevokeQueue <- revokeStruct{args.Key, &callback}
 				<-callback
 			}
 			ss.ListDataMutex.Lock()
@@ -348,10 +368,12 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 		}
 	}
 	//fmt.Println("return from AppendToList")
+	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
 	return nil
 }
 
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
+	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Lock()
 	//fmt.Println("entering RemoveFromList")
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
@@ -380,7 +402,7 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 			ss.LeasesMutex.Unlock()
 			if exists {
 				callback := make(chan bool, 1)
-				go handleRevoke(ss, args.Key, &callback)
+				ss.RevokeQueue <- revokeStruct{args.Key, &callback}
 				<-callback
 			}
 			ss.ListDataMutex.Lock()
@@ -392,7 +414,8 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 			reply.Status = storagerpc.ItemNotFound
 		}
 	}
-	//fmt.Println("leaving RemoveFromList")
+	// /fmt.Println("leaving RemoveFromList")
+	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
 	return nil
 }
 
@@ -421,6 +444,12 @@ func getMinHash(ss *storageServer) uint32 {
 	return minHash
 }
 
+func getHash(s string) int {
+	hasher := fnv.New32()
+	hasher.Write([]byte(s))
+	return int(hasher.Sum32())
+}
+
 func withinBounds(key string, ss *storageServer) bool {
 	//fmt.Println("min: " + strconv.Itoa(int(ss.minHash)) + " max: " + strconv.Itoa(int(ss.NodeID)))
 	if len(ss.Nodes) == 1 {
@@ -436,50 +465,67 @@ func withinBounds(key string, ss *storageServer) bool {
 	return hash <= ss.NodeID || hash >= ss.minHash
 }
 
-func handleRevoke(ss *storageServer, key string, callback *(chan bool)) {
+func handleRevoke(ss *storageServer) {
 	//fmt.Println("revoking key: " + key)
-	ss.LeasesMutex.Lock()
-	leases := ss.Leases[key]
-	ss.LeasesMutex.Unlock()
-	leases.revokeInProgress = true
-	for leases.serverList.Len() != 0 {
-		//fmt.Println("entering lease loop")
-		for e := leases.serverList.Front(); e != nil; e = e.Next() {
-			subLease := e.Value.(*subLeaseStruct)
-			if time.Since(subLease.GrantTime) > time.Duration(storagerpc.LeaseSeconds+storagerpc.LeaseGuardSeconds)*time.Second {
-				leases.serverList.Remove(e)
-				fmt.Println()
-				//fmt.Println("It has expired!")
-				continue
+	for {
+		select {
+		case newrevoke := <- ss.RevokeQueue:
+			ss.LeasesMutex.Lock()
+			leases, ok := ss.Leases[newrevoke.Key]
+			ss.LeasesMutex.Unlock()
+			if !ok {
+				*newrevoke.Callback <- true
+				continue;
 			}
-			revokeConn, err := rpc.DialHTTP("tcp", subLease.HostPort)
-			args := &storagerpc.RevokeLeaseArgs{
-				Key: key,
-			}
-			var reply storagerpc.RevokeLeaseReply
-			if err != nil {
-				leases.serverList.Remove(e)
-				continue
-			}
-			//fmt.Println("about to call!")
-			rpcFinish := revokeConn.Go("LeaseCallbacks.RevokeLease", args, &reply, nil)
-			timeout := time.NewTimer(time.Duration(storagerpc.LeaseSeconds+storagerpc.LeaseGuardSeconds)*time.Second - time.Since(subLease.GrantTime))
-			select {
-			case <-rpcFinish.Done:
-				if rpcFinish.Error != nil {
-					fmt.Println(err)
-					leases.serverList.Remove(e)
-				} else {
-					leases.serverList.Remove(e)
+			leases.revokeInProgress = true
+			for leases.serverList.Len() != 0 {
+				ss.LeasesMutex.Lock()
+				for e := leases.serverList.Front(); e != nil; e = e.Next() {
+					subLease := e.Value.(*subLeaseStruct)
+					if time.Since(subLease.GrantTime) > time.Duration(storagerpc.LeaseSeconds+storagerpc.LeaseGuardSeconds)*time.Second {
+						leases.serverList.Remove(e)
+						fmt.Println()
+						//fmt.Println("It has expired!")
+						continue
+					}
+					revokeConn, err := rpc.DialHTTP("tcp", subLease.HostPort)
+					args := &storagerpc.RevokeLeaseArgs{
+						Key: newrevoke.Key,
+					}
+					var reply storagerpc.RevokeLeaseReply
+					if err != nil {
+						leases.serverList.Remove(e)
+						continue
+					}
+					//fmt.Println("about to call!")
+					rpcFinish := revokeConn.Go("LeaseCallbacks.RevokeLease", args, &reply, nil)
+					timeout := time.NewTimer(time.Duration(storagerpc.LeaseSeconds+storagerpc.LeaseGuardSeconds)*time.Second - time.Since(subLease.GrantTime))
+					ss.LeasesMutex.Unlock()
+					select {
+					case <-rpcFinish.Done:
+						ss.LeasesMutex.Lock()
+						if rpcFinish.Error != nil {
+							fmt.Println(err)
+							leases.serverList.Remove(e)
+						} else {
+							leases.serverList.Remove(e)
+						}
+						ss.LeasesMutex.Unlock()
+						timeout.Stop()
+					case <-timeout.C:
+						ss.LeasesMutex.Lock()
+						leases.serverList.Remove(e)
+						ss.LeasesMutex.Unlock()
+
+					}
+					ss.LeasesMutex.Lock()
 				}
-				timeout.Stop()
-			case <-timeout.C:
-				leases.serverList.Remove(e)
+				ss.LeasesMutex.Unlock()
 			}
+			ss.LeasesMutex.Lock()
+			delete(ss.Leases, newrevoke.Key)
+			ss.LeasesMutex.Unlock()
+			*newrevoke.Callback <- true
 		}
 	}
-	ss.LeasesMutex.Lock()
-	delete(ss.Leases, key)
-	ss.LeasesMutex.Unlock()
-	*callback <- true
 }
