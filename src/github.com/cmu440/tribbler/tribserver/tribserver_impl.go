@@ -194,7 +194,12 @@ func (ts *tribServer) GetFriends(args *tribrpc.GetFriendsArgs, reply *tribrpc.Ge
 	}
 	subscribeeList, err := ts.ls.GetList(sublistRKey)
 	if err != nil {
-		return err
+		if err.Error() == "Key not found." {
+			reply.Status = tribrpc.OK
+			return nil
+		} else {
+			return err
+		}
 	}
 	var friends []string
 	var subscribedMap = make(map[string]bool)
