@@ -117,7 +117,7 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 			connected = true
 			break
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(1 * time.Second)
 	}
 	if !connected {
 		fmt.Println("libstore:123 could not connect to storage server after 5 tries")
@@ -152,11 +152,15 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 }
 
 func (ls *libstore) Get(key string) (string, error) {
+	ls.stringMutex.Lock()
 	for k, v := range ls.stringCache {
 		if k == key {
-			return v.value, nil
+			val := v.value
+			ls.stringMutex.Unlock()
+			return val, nil
 		}
 	}
+	ls.stringMutex.Unlock()
 
 	// look up key in list of keys, see how many times it's been accessed
 	keyFound := false
@@ -205,7 +209,9 @@ func (ls *libstore) Get(key string) (string, error) {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		//fmt.Printf("error: %d\n", reply.Status)
+		if reply.Status == storagerpc.WrongServer{
+			fmt.Println("BAD SO BAD")
+		}
 		return "", errors.New("Key not found.")
 	}
 	if ls.mode != Never {
@@ -240,7 +246,9 @@ func (ls *libstore) Put(key, value string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		//fmt.Printf("error: %d\n", reply.Status)
+		if reply.Status == storagerpc.WrongServer{
+			fmt.Println("BAD SO BAD")
+		}
 		return fmt.Errorf("Wrong key range (shouldn't happen for checkpoint).")
 	}
 
@@ -262,18 +270,24 @@ func (ls *libstore) Delete(key string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		//fmt.Printf("error: %d\n", reply.Status)
+		if reply.Status == storagerpc.WrongServer{
+			fmt.Println("BAD SO BAD")
+		}
 		return errors.New("Key not found.")
 	}
 	return nil
 }
 
 func (ls *libstore) GetList(key string) ([]string, error) {
+	ls.listMutex.Lock()
 	for k, v := range ls.listCache {
 		if k == key {
-			return v.value, nil
+			val := v.value
+			ls.listMutex.Unlock()
+			return val, nil
 		}
 	}
+	ls.listMutex.Unlock()
 
 	// look up key in list of keys, see how many times it's been accessed
 	keyFound := false
@@ -322,7 +336,9 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		//fmt.Printf("error: %d\n", reply.Status)
+		if reply.Status == storagerpc.WrongServer{
+			fmt.Println("BAD SO BAD")
+		}
 		return []string{}, errors.New("Key not found.")
 	}
 
@@ -357,7 +373,9 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		//fmt.Printf("error: %d\n", reply.Status)
+		if reply.Status == storagerpc.WrongServer{
+			fmt.Println("BAD SO BAD")
+		}
 		return errors.New("Item not found.")
 	}
 	return nil
@@ -380,6 +398,8 @@ func (ls *libstore) AppendToList(key, newItem string) error {
 		return errors.New("Wrong server.")
 	} else if reply.Status == storagerpc.ItemExists {
 		return errors.New("Item exists.")
+	} else if reply.Status != storagerpc.OK {
+		return errors.New("BAD SO BAD")
 	}
 	return nil
 }

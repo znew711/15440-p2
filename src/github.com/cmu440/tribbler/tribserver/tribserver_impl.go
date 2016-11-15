@@ -1,21 +1,21 @@
 package tribserver
 
 import (
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/cmu440/tribbler/libstore"
 	"github.com/cmu440/tribbler/rpc/tribrpc"
 	"github.com/cmu440/tribbler/util"
+	"log"
 	"net"
 	"net/http"
 	"net/rpc"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-	"log"
-	"os"
 )
 
 type tribServer struct {
@@ -37,24 +37,24 @@ func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) 
 	l.Println("new tribserver")
 	tribServer := new(tribServer)
 
-    // Create the server socket that will listen for incoming RPCs.
-    listener, err := net.Listen("tcp", myHostPort)
-    if err != nil {
-    	fmt.Println("listen fails")
-        return nil, err
-    }
+	// Create the server socket that will listen for incoming RPCs.
+	listener, err := net.Listen("tcp", myHostPort)
+	if err != nil {
+		fmt.Println("listen fails")
+		return nil, err
+	}
 
-    // Wrap the tribServer before registering it for RPC.
-    err = rpc.RegisterName("TribServer", tribrpc.Wrap(tribServer))
-    if err != nil {
-    	fmt.Println("could not register tribserver")
-        return nil, err
-    }
+	// Wrap the tribServer before registering it for RPC.
+	err = rpc.RegisterName("TribServer", tribrpc.Wrap(tribServer))
+	if err != nil {
+		fmt.Println("could not register tribserver")
+		return nil, err
+	}
 
-    // create new libstore for communication with storage server
-   	//var ls libstore.Libstore
-    connected := false
-    var ls libstore.Libstore
+	// create new libstore for communication with storage server
+	//var ls libstore.Libstore
+	connected := false
+	var ls libstore.Libstore
 	for numTries := 0; numTries < 5; numTries++ {
 		ls, err = libstore.NewLibstore(masterServerHostPort, myHostPort, libstore.Never)
 		if err != nil {
@@ -70,10 +70,10 @@ func NewTribServer(masterServerHostPort, myHostPort string) (TribServer, error) 
 		return nil, errors.New("Libstore could not connect to storage server.")
 	}
 
-    rpc.HandleHTTP()
-    go http.Serve(listener, nil)
+	rpc.HandleHTTP()
+	go http.Serve(listener, nil)
 
-    tribServer.listener = listener
+	tribServer.listener = listener
 
 	return tribServer, nil
 }
