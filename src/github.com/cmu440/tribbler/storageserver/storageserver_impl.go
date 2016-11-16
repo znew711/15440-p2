@@ -90,11 +90,12 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 	if masterServerHostPort == "" {
 		//master
 		ss.Nodes[0] = storagerpc.Node{"localhost:" + strconv.Itoa(port), nodeID}
+		//see if we are the only server
 		needMoreSlaves := numNodes > 1
 		for needMoreSlaves {
 			select {
+			//wait for new machines to reply
 			case <-ss.SlaveJoined:
-				//fmt.Println("nodes needed: " + strconv.Itoa(numNodes) + " nodes now: " + strconv.Itoa(ss.NodesJoined))
 				if ss.NodesJoined == numNodes {
 					needMoreSlaves = false
 				}
@@ -108,6 +109,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		for tryCount := 0; tryCount < 5; tryCount++ {
 			masterConn, err = rpc.DialHTTP("tcp", masterServerHostPort)
 			if err != nil {
+				//try again later
 				time.Sleep(time.Second)
 			} else {
 				break
@@ -121,6 +123,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		}
 		var reply storagerpc.RegisterReply
 		notReady := true
+		//waiting for server to reply that everyone has joined
 		for notReady {
 			if err := masterConn.Call("StorageServer.RegisterServer", args, &reply); err != nil {
 				return nil, err
@@ -131,6 +134,7 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 				ss.ExpectedNumNodes = len(reply.Servers)
 				ss.Ready = true
 			} else {
+				//try again
 				time.Sleep(time.Second)
 			}
 		}
@@ -147,6 +151,7 @@ func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *st
 			found = true
 		}
 	}
+	//we have found a new node! update our count
 	if !found {
 		ss.Nodes[ss.NodesJoined] = args.ServerInfo
 		ss.NodesJoined += 1
@@ -163,6 +168,7 @@ func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *st
 
 func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *storagerpc.GetServersReply) error {
 	if ss.Ready {
+		//come back later pls
 		reply.Status = storagerpc.OK
 		reply.Servers = ss.Nodes
 	} else {
@@ -188,8 +194,10 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 			ss.LeasesMutex.Lock()
 			val, ok := ss.Leases[args.Key]
 			ss.LeasesMutex.Unlock()
+			//lease exists, just update it
 			if ok {
 				if val.revokeInProgress {
+					//refuse to grand a lease
 					reply.Lease = storagerpc.Lease{false, 0}
 				} else {
 					reply.Lease = storagerpc.Lease{true, storagerpc.LeaseSeconds}
@@ -200,6 +208,7 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 					val.serverList.PushBack(&subLease)
 				}
 			} else {
+				//create a new lease!
 				reply.Lease = storagerpc.Lease{true, storagerpc.LeaseSeconds}
 				ss.LeasesMutex.Lock()
 				ss.Leases[args.Key] = &leaseStruct{
@@ -233,6 +242,7 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 		ss.LeasesMutex.Lock()
 		_, exists := ss.Leases[args.Key]
 		ss.LeasesMutex.Unlock()
+		//revoke everyone else's lease
 		if exists {
 			callback := make(chan bool, 1)
 			ss.RevokeQueue <- revokeStruct{args.Key, &callback}
@@ -268,8 +278,10 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 			ss.LeasesMutex.Lock()
 			val, ok := ss.Leases[args.Key]
 			ss.LeasesMutex.Unlock()
+			//lease exists, just update
 			if ok {
 				if val.revokeInProgress {
+					//refuse to give out a lease
 					reply.Lease = storagerpc.Lease{false, 0}
 				} else {
 					reply.Lease = storagerpc.Lease{true, storagerpc.LeaseSeconds}
@@ -280,6 +292,7 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 					val.serverList.PushBack(&subLease)
 				}
 			} else {
+				//create a new lease!
 				reply.Lease = storagerpc.Lease{true, storagerpc.LeaseSeconds}
 				ss.LeasesMutex.Lock()
 				ss.Leases[args.Key] = &leaseStruct{
@@ -308,6 +321,7 @@ func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutRepl
 	_, exists := ss.Leases[args.Key]
 	ss.LeasesMutex.Unlock()
 	if exists {
+		//revoke everyone else's lease
 		callback := make(chan bool, 1)
 		ss.RevokeQueue <- revokeStruct{args.Key, &callback}
 		<-callback
@@ -335,6 +349,7 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 		ss.ListDataMutex.Unlock()
 		reply.Status = storagerpc.OK
 	} else {
+		//see if the value already exists in the list
 		found := false
 		for i := 0; i < len(list); i++ {
 			if list[i] == args.Value {
@@ -348,6 +363,7 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 			_, exists := ss.Leases[args.Key]
 			ss.LeasesMutex.Unlock()
 			if exists {
+				//revoke everyone else's lease
 				callback := make(chan bool, 1)
 				ss.RevokeQueue <- revokeStruct{args.Key, &callback}
 				<-callback
@@ -376,6 +392,8 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 	} else {
 		found := false
 		ss.ListDataMutex.Lock()
+		//walk through the list until we find the element
+		//copy over with the next element and propogate down
 		for index, element := range ss.ListData[args.Key] {
 			if element == args.Value {
 				found = true
@@ -389,11 +407,13 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 			_, exists := ss.Leases[args.Key]
 			ss.LeasesMutex.Unlock()
 			if exists {
+				//revoke everyone else's lease
 				callback := make(chan bool, 1)
 				ss.RevokeQueue <- revokeStruct{args.Key, &callback}
 				<-callback
 			}
 			length := len(ss.ListData[args.Key])
+			//change the length of the list to get rid of the end element
 			ss.ListData[args.Key] = ss.ListData[args.Key][:length-1]
 			reply.Status = storagerpc.OK
 		} else {
@@ -429,12 +449,16 @@ func getMinHash(ss *storageServer) uint32 {
 	return minHash
 }
 
+//has the entire key instead of just the portion before the colon
 func getHash(s string) int {
 	hasher := fnv.New32()
 	hasher.Write([]byte(s))
 	return int(hasher.Sum32())
 }
 
+//within bounds if the hash of the key before the colon is
+//greater than the next lowest sever's hash
+//and less than or equal to mine (with wraparound)
 func withinBounds(key string, ss *storageServer) bool {
 	if len(ss.Nodes) == 1 {
 		return true
@@ -456,20 +480,24 @@ func handleRevoke(ss *storageServer) {
 			ss.LeasesMutex.Lock()
 			leases, ok := ss.Leases[newrevoke.Key]
 			ss.LeasesMutex.Unlock()
+			//someone else has already gotten rid of this lease! we can exit
 			if !ok {
 				*newrevoke.Callback <- true
 				continue
 			}
+			//tell get not to give out new leases
 			leases.revokeInProgress = true
 			for leases.serverList.Len() != 0 {
 				ss.LeasesMutex.Lock()
 				for e := leases.serverList.Front(); e != nil; e = e.Next() {
 					subLease := e.Value.(*subLeaseStruct)
+					//if we have expired, remove it from the list and move on to the next element
 					if time.Since(subLease.GrantTime) > time.Duration(storagerpc.LeaseSeconds+storagerpc.LeaseGuardSeconds)*time.Second {
 						leases.serverList.Remove(e)
 						fmt.Println()
 						continue
 					}
+					//call the hostport of the lease owner.
 					revokeConn, err := rpc.DialHTTP("tcp", subLease.HostPort)
 					args := &storagerpc.RevokeLeaseArgs{
 						Key: newrevoke.Key,
@@ -482,6 +510,7 @@ func handleRevoke(ss *storageServer) {
 					rpcFinish := revokeConn.Go("LeaseCallbacks.RevokeLease", args, &reply, nil)
 					timeout := time.NewTimer(time.Duration(storagerpc.LeaseSeconds+storagerpc.LeaseGuardSeconds)*time.Second - time.Since(subLease.GrantTime))
 					ss.LeasesMutex.Unlock()
+					//wait for the earleir of: rpc returning and our timer timing out
 					select {
 					case <-rpcFinish.Done:
 						ss.LeasesMutex.Lock()

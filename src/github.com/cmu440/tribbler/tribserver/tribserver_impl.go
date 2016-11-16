@@ -166,7 +166,10 @@ func (ts *tribServer) RemoveSubscription(args *tribrpc.SubscriptionArgs, reply *
 
 	// remove user from target's subscribee list
 	err = ts.ls.RemoveFromList(sublistRKey, args.UserID)
-	if err != nil {
+	if err != nil && err.Error() == "Item not found." {
+		reply.Status = tribrpc.OK
+		return nil
+	} else if err != nil {
 		return err
 	}
 	reply.Status = tribrpc.OK
