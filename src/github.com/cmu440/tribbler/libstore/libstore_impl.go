@@ -127,7 +127,6 @@ func NewLibstore(masterServerHostPort, myHostPort string, mode LeaseMode) (Libst
 	//time.Sleep(1*time.Second)
 
 	//libstore.servers = reply.Servers
-	fmt.Printf("length of server list: %d\n", len(reply.Servers))
 	ssList := []*ssInfo{}
 	for _, node := range reply.Servers {
 		cli, err := rpc.DialHTTP("tcp", node.HostPort)

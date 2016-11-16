@@ -108,8 +108,6 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		for tryCount := 0; tryCount < 5; tryCount++ {
 			masterConn, err = rpc.DialHTTP("tcp", masterServerHostPort)
 			if err != nil {
-				//fmt.Println("SLAVE/MASTER ERROR 2 " + strconv.Itoa(int(nodeID)))
-				fmt.Println(err)
 				time.Sleep(time.Second)
 			} else {
 				break
@@ -124,18 +122,15 @@ func NewStorageServer(masterServerHostPort string, numNodes, port int, nodeID ui
 		var reply storagerpc.RegisterReply
 		notReady := true
 		for notReady {
-			//fmt.Println("Slave: time to register myself! " + strconv.Itoa(int(ss.NodeID)))
 			if err := masterConn.Call("StorageServer.RegisterServer", args, &reply); err != nil {
 				return nil, err
 			}
 			if reply.Status == storagerpc.OK {
-				//fmt.Println("Slave: master is ready! " + strconv.Itoa(int(ss.NodeID)))
 				ss.Nodes = reply.Servers
 				notReady = false
 				ss.ExpectedNumNodes = len(reply.Servers)
 				ss.Ready = true
 			} else {
-				//fmt.Println("Slave: master is not ready " + strconv.Itoa(int(ss.NodeID)))
 				time.Sleep(time.Second)
 			}
 		}
@@ -153,7 +148,6 @@ func (ss *storageServer) RegisterServer(args *storagerpc.RegisterArgs, reply *st
 		}
 	}
 	if !found {
-		//fmt.Println("registering new server " + strconv.Itoa(int(args.ServerInfo.NodeID)))
 		ss.Nodes[ss.NodesJoined] = args.ServerInfo
 		ss.NodesJoined += 1
 	}
@@ -178,7 +172,6 @@ func (ss *storageServer) GetServers(args *storagerpc.GetServersArgs, reply *stor
 }
 
 func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetReply) error {
-	//fmt.Println("entering Get")
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -222,12 +215,10 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 			}
 		}
 	}
-	//fmt.Println("leaving get")
 	return nil
 }
 
 func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.DeleteReply) error {
-	//fmt.Println("entering delete")
 	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Lock()
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
@@ -252,13 +243,11 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 		ss.DataMutex.Unlock()
 		reply.Status = storagerpc.OK
 	}
-	//fmt.Println("leaving delete")
 	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
 	return nil
 }
 
 func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.GetListReply) error {
-	//fmt.Println("entering get list")
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -306,34 +295,11 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 			}
 		}
 	}
-	ss.ListDataMutex.Lock()
-	check := ss.ListData[args.Key]
-	set := make(map[string]bool, len(check))
-	fail := false
-	for _, data := range check {
-		if set[data] == true {
-			fmt.Println("POST CONDITION FAIL")
-			if args.WantLease {
-				fmt.Println("And we wanted a lease!")
-			}
-			fail = true
-		}
-		set[data] = true
-	}
-	if fail {
-		fmt.Print("Get: ")
-		fmt.Print(ss.ListData[args.Key])
-		fmt.Print("\n")
-	}
-	ss.ListDataMutex.Unlock()
-	
-	//fmt.println("leaving get list")
 	return nil
 }
 
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
 	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Lock()
-	//fmt.Println("entering Put "  + args.Key + " " + args.Value)
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -350,14 +316,12 @@ func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutRepl
 	ss.Data[args.Key] = args.Value
 	ss.DataMutex.Unlock()
 	reply.Status = storagerpc.OK
-	//fmt.Println("Leaving put "  + args.Key + " " + args.Value)
 	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
 	return nil
 }
 
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
 	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Lock()
-	//fmt.Println("entering AppendToList")
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -394,32 +358,12 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 			reply.Status = storagerpc.OK
 		}
 	}
-	//fmt.Println("return from AppendToList")
-	ss.ListDataMutex.Lock()
-	check := ss.ListData[args.Key]
-	set := make(map[string]bool, len(check))
-	fail := false
-	for _, data := range check {
-		if set[data] == true {
-			fmt.Println("POST CONDITION FAIL")
-			fail = true
-		}
-		set[data] = true
-	}
-	if fail {
-		fmt.Println("key: " + args.Key)
-		fmt.Print("AppendToList: ")
-		fmt.Print(ss.ListData[args.Key])
-		fmt.Print("\n")
-	}
-	ss.ListDataMutex.Unlock()
 	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
 	return nil
 }
 
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
 	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Lock()
-	//fmt.Println("entering RemoveFromList")
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -457,25 +401,6 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 		}
 		ss.ListDataMutex.Unlock()
 	}
-	// /fmt.Println("leaving RemoveFromList")
-	ss.ListDataMutex.Lock()
-	check := ss.ListData[args.Key]
-	set := make(map[string]bool, len(check))
-	fail := false
-	for _, data := range check {
-		if set[data] == true {
-			fmt.Println("POST CONDITION FAIL")
-			fail = true
-		}
-		set[data] = true
-	}
-	if fail {
-		fmt.Println("key: " + args.Key)
-		fmt.Print("RemoveToList: ")
-		fmt.Print(ss.ListData[args.Key])
-		fmt.Print("\n")
-	}
-	ss.ListDataMutex.Unlock()
 	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
 	return nil
 }
@@ -501,7 +426,6 @@ func getMinHash(ss *storageServer) uint32 {
 			}
 		}
 	}
-	//fmt.Println("my hash: " + strconv.Itoa(int(ss.NodeID)) + " my minimum: " + strconv.Itoa(int(minHash)))
 	return minHash
 }
 
@@ -512,7 +436,6 @@ func getHash(s string) int {
 }
 
 func withinBounds(key string, ss *storageServer) bool {
-	//fmt.Println("min: " + strconv.Itoa(int(ss.minHash)) + " max: " + strconv.Itoa(int(ss.NodeID)))
 	if len(ss.Nodes) == 1 {
 		return true
 	}
@@ -527,7 +450,6 @@ func withinBounds(key string, ss *storageServer) bool {
 }
 
 func handleRevoke(ss *storageServer) {
-	//fmt.Println("revoking key: " + key)
 	for {
 		select {
 		case newrevoke := <- ss.RevokeQueue:
@@ -546,7 +468,6 @@ func handleRevoke(ss *storageServer) {
 					if time.Since(subLease.GrantTime) > time.Duration(storagerpc.LeaseSeconds+storagerpc.LeaseGuardSeconds)*time.Second {
 						leases.serverList.Remove(e)
 						fmt.Println()
-						//fmt.Println("It has expired!")
 						continue
 					}
 					revokeConn, err := rpc.DialHTTP("tcp", subLease.HostPort)
@@ -558,7 +479,6 @@ func handleRevoke(ss *storageServer) {
 						leases.serverList.Remove(e)
 						continue
 					}
-					//fmt.Println("about to call!")
 					rpcFinish := revokeConn.Go("LeaseCallbacks.RevokeLease", args, &reply, nil)
 					timeout := time.NewTimer(time.Duration(storagerpc.LeaseSeconds+storagerpc.LeaseGuardSeconds)*time.Second - time.Since(subLease.GrantTime))
 					ss.LeasesMutex.Unlock()
