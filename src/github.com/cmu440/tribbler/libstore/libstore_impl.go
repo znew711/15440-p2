@@ -7,12 +7,12 @@ import (
 	//"net/http"
 	"github.com/cmu440/tribbler/rpc/librpc"
 	"github.com/cmu440/tribbler/rpc/storagerpc"
+	"log"
 	"net/rpc"
-	"time"
+	"os"
 	"strings"
 	"sync"
-	"log"
-	"os"
+	"time"
 )
 
 const UINT32_MAX uint32 = 4294967295
@@ -208,7 +208,7 @@ func (ls *libstore) Get(key string) (string, error) {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		if reply.Status == storagerpc.WrongServer{
+		if reply.Status == storagerpc.WrongServer {
 			fmt.Println("BAD SO BAD")
 		}
 		return "", errors.New("Key not found.")
@@ -245,7 +245,7 @@ func (ls *libstore) Put(key, value string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		if reply.Status == storagerpc.WrongServer{
+		if reply.Status == storagerpc.WrongServer {
 			fmt.Println("BAD SO BAD")
 		}
 		return fmt.Errorf("Wrong key range (shouldn't happen for checkpoint).")
@@ -269,7 +269,7 @@ func (ls *libstore) Delete(key string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		if reply.Status == storagerpc.WrongServer{
+		if reply.Status == storagerpc.WrongServer {
 			fmt.Println("BAD SO BAD")
 		}
 		return errors.New("Key not found.")
@@ -335,7 +335,7 @@ func (ls *libstore) GetList(key string) ([]string, error) {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		if reply.Status == storagerpc.WrongServer{
+		if reply.Status == storagerpc.WrongServer {
 			fmt.Println("BAD SO BAD")
 		}
 		return []string{}, errors.New("Key not found.")
@@ -372,7 +372,7 @@ func (ls *libstore) RemoveFromList(key, removeItem string) error {
 	if reply.Status != storagerpc.OK {
 		// TODO: storageserver should handle "wrong key range"
 		// for now, just return a new error
-		if reply.Status == storagerpc.WrongServer{
+		if reply.Status == storagerpc.WrongServer {
 			fmt.Println("BAD SO BAD")
 		}
 		return errors.New("Item not found.")

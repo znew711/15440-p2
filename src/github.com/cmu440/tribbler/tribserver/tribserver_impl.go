@@ -127,7 +127,10 @@ func (ts *tribServer) AddSubscription(args *tribrpc.SubscriptionArgs, reply *tri
 
 	// mark user as subscribed to target
 	err = ts.ls.AppendToList(sublistRKey, args.UserID)
-	if err != nil {
+	if err != nil && err.Error() == "Item exists." {
+		reply.Status = tribrpc.Exists
+		return nil
+	} else if err != nil {
 		return err
 	}
 

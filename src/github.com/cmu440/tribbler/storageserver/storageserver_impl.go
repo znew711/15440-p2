@@ -219,7 +219,7 @@ func (ss *storageServer) Get(args *storagerpc.GetArgs, reply *storagerpc.GetRepl
 }
 
 func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.DeleteReply) error {
-	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Lock()
+	ss.WriteLocks[getHash(args.Key)%len(ss.WriteLocks)].Lock()
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -243,7 +243,7 @@ func (ss *storageServer) Delete(args *storagerpc.DeleteArgs, reply *storagerpc.D
 		ss.DataMutex.Unlock()
 		reply.Status = storagerpc.OK
 	}
-	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
+	ss.WriteLocks[getHash(args.Key)%len(ss.WriteLocks)].Unlock()
 	return nil
 }
 
@@ -299,7 +299,7 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 }
 
 func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Lock()
+	ss.WriteLocks[getHash(args.Key)%len(ss.WriteLocks)].Lock()
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -316,12 +316,12 @@ func (ss *storageServer) Put(args *storagerpc.PutArgs, reply *storagerpc.PutRepl
 	ss.Data[args.Key] = args.Value
 	ss.DataMutex.Unlock()
 	reply.Status = storagerpc.OK
-	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
+	ss.WriteLocks[getHash(args.Key)%len(ss.WriteLocks)].Unlock()
 	return nil
 }
 
 func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Lock()
+	ss.WriteLocks[getHash(args.Key)%len(ss.WriteLocks)].Lock()
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -358,12 +358,12 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 			reply.Status = storagerpc.OK
 		}
 	}
-	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
+	ss.WriteLocks[getHash(args.Key)%len(ss.WriteLocks)].Unlock()
 	return nil
 }
 
 func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storagerpc.PutReply) error {
-	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Lock()
+	ss.WriteLocks[getHash(args.Key)%len(ss.WriteLocks)].Lock()
 	if !withinBounds(args.Key, ss) {
 		reply.Status = storagerpc.WrongServer
 		return nil
@@ -401,7 +401,7 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 		}
 		ss.ListDataMutex.Unlock()
 	}
-	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
+	ss.WriteLocks[getHash(args.Key)%len(ss.WriteLocks)].Unlock()
 	return nil
 }
 
@@ -452,13 +452,13 @@ func withinBounds(key string, ss *storageServer) bool {
 func handleRevoke(ss *storageServer) {
 	for {
 		select {
-		case newrevoke := <- ss.RevokeQueue:
+		case newrevoke := <-ss.RevokeQueue:
 			ss.LeasesMutex.Lock()
 			leases, ok := ss.Leases[newrevoke.Key]
 			ss.LeasesMutex.Unlock()
 			if !ok {
 				*newrevoke.Callback <- true
-				continue;
+				continue
 			}
 			leases.revokeInProgress = true
 			for leases.serverList.Len() != 0 {
