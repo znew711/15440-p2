@@ -264,13 +264,17 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 		return nil
 	}
 	ss.ListDataMutex.Lock()
-	i, ok := ss.ListData[args.Key]
+	_, ok := ss.ListData[args.Key]
 	ss.ListDataMutex.Unlock()
 	if !ok {
 		reply.Status = storagerpc.KeyNotFound
 	} else {
 		reply.Status = storagerpc.OK
-		reply.Value = i
+		ss.ListDataMutex.Lock()
+		newArray := make([]string, len(ss.ListData[args.Key]))
+		copy(newArray, ss.ListData[args.Key])
+		reply.Value = newArray
+		ss.ListDataMutex.Unlock()
 		if args.WantLease {
 			ss.LeasesMutex.Lock()
 			val, ok := ss.Leases[args.Key]
@@ -302,7 +306,28 @@ func (ss *storageServer) GetList(args *storagerpc.GetArgs, reply *storagerpc.Get
 			}
 		}
 	}
-	//fmt.Println("leaving get list")
+	ss.ListDataMutex.Lock()
+	check := ss.ListData[args.Key]
+	set := make(map[string]bool, len(check))
+	fail := false
+	for _, data := range check {
+		if set[data] == true {
+			fmt.Println("POST CONDITION FAIL")
+			if args.WantLease {
+				fmt.Println("And we wanted a lease!")
+			}
+			fail = true
+		}
+		set[data] = true
+	}
+	if fail {
+		fmt.Print("Get: ")
+		fmt.Print(ss.ListData[args.Key])
+		fmt.Print("\n")
+	}
+	ss.ListDataMutex.Unlock()
+	
+	//fmt.println("leaving get list")
 	return nil
 }
 
@@ -370,6 +395,24 @@ func (ss *storageServer) AppendToList(args *storagerpc.PutArgs, reply *storagerp
 		}
 	}
 	//fmt.Println("return from AppendToList")
+	ss.ListDataMutex.Lock()
+	check := ss.ListData[args.Key]
+	set := make(map[string]bool, len(check))
+	fail := false
+	for _, data := range check {
+		if set[data] == true {
+			fmt.Println("POST CONDITION FAIL")
+			fail = true
+		}
+		set[data] = true
+	}
+	if fail {
+		fmt.Println("key: " + args.Key)
+		fmt.Print("AppendToList: ")
+		fmt.Print(ss.ListData[args.Key])
+		fmt.Print("\n")
+	}
+	ss.ListDataMutex.Unlock()
 	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
 	return nil
 }
@@ -397,7 +440,6 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 				ss.ListData[args.Key][index] = ss.ListData[args.Key][index+1]
 			}
 		}
-		ss.ListDataMutex.Unlock()
 		if found {
 			ss.LeasesMutex.Lock()
 			_, exists := ss.Leases[args.Key]
@@ -407,16 +449,33 @@ func (ss *storageServer) RemoveFromList(args *storagerpc.PutArgs, reply *storage
 				ss.RevokeQueue <- revokeStruct{args.Key, &callback}
 				<-callback
 			}
-			ss.ListDataMutex.Lock()
 			length := len(ss.ListData[args.Key])
 			ss.ListData[args.Key] = ss.ListData[args.Key][:length-1]
-			ss.ListDataMutex.Unlock()
 			reply.Status = storagerpc.OK
 		} else {
 			reply.Status = storagerpc.ItemNotFound
 		}
+		ss.ListDataMutex.Unlock()
 	}
 	// /fmt.Println("leaving RemoveFromList")
+	ss.ListDataMutex.Lock()
+	check := ss.ListData[args.Key]
+	set := make(map[string]bool, len(check))
+	fail := false
+	for _, data := range check {
+		if set[data] == true {
+			fmt.Println("POST CONDITION FAIL")
+			fail = true
+		}
+		set[data] = true
+	}
+	if fail {
+		fmt.Println("key: " + args.Key)
+		fmt.Print("RemoveToList: ")
+		fmt.Print(ss.ListData[args.Key])
+		fmt.Print("\n")
+	}
+	ss.ListDataMutex.Unlock()
 	ss.WriteLocks[getHash(args.Key) % len(ss.WriteLocks)].Unlock()
 	return nil
 }
